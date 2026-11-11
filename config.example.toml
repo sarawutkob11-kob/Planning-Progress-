@@ -1,0 +1,53 @@
+# Copy this file to config.toml and adjust.
+
+[source]
+# The OneDrive-synced workbook. The app only ever reads a COPY of it (see snapshots/).
+excel_path = "%USERPROFILE%/OneDrive - <Company>/<file>.xlsx"
+
+[storage]
+# Phase 1: local folder on the PMO PC (not inside OneDrive).
+# Phase 2 can point this elsewhere or switch backend without touching business logic.
+backend = "sqlite"
+data_dir = "%LOCALAPPDATA%/PlanningProgress"
+
+[rules]
+# Any date outside this window goes to the PMO review queue instead of being used.
+date_window_start = 2026-08-01
+date_window_end = 2027-03-31
+
+[alerts]
+# Traffic Light: %Fail above this is Red (0.05 = 5%, i.e. UAT pass >= 95%).
+fail_threshold = 0.05
+# DRY RUN (default): every email goes to pmo_email only, with [DRY RUN] in the subject and the real
+# To/CC in a banner, plus an .html copy in <data_dir>/previews/. Set to false ONLY when the PMO says go live.
+dry_run = true
+pmo_email = ""
+# Outlook account to send from (its SMTP address). Blank = Outlook's default account.
+send_account = ""
+# A scheduled run that starts after this time is skipped (no late sends).
+run_deadline = "09:30"
+# BOT Financial Institutions' Holidays API. Register for a key at https://portal.api.bot.or.th/
+# Verify the URL there. The key can also come from the UAT_BOT_API_KEY environment variable.
+bot_url = "https://gateway.api.bot.or.th/financial-institutions-holidays/?year={year}"
+bot_api_key = ""
+bot_key_header = "Authorization"
+# Test-result uploads (stored under <data_dir>/attachments/<item-id>/).
+attachment_max_mb = 25
+attachment_types = ["pdf", "xlsx", "xls", "csv", "docx", "doc", "pptx", "png", "jpg", "zip", "msg"]
+
+[sync]
+# 2-way sync with the workbook (Part 3). Writes go through Excel itself, so images, formulas and
+# formatting are kept. A backup copy is taken before every write (never deleted).
+debounce_s = 5          # wait until the file has been quiet this long before reading it
+poll_s = 60             # fallback check if no file-change event arrives
+batch_quiet_s = 10      # app changes made within this many seconds are saved together
+retry_minutes = [1, 2, 5, 10, 15, 30]   # file locked: retry at these offsets, then status = error
+# backup_dir = "%LOCALAPPDATA%/PlanningProgress/backups"
+
+# Optional: override accepted header names (first line of the header cell, case-insensitive).
+# [headers."Test Progress"]
+# report_by_email = ["Report By Email", "Reporter Email"]
+
+[features]
+# TEMPORARY "Clear project data" button (Settings > Danger zone). Set to false to hide it.
+enable_clear_project = true

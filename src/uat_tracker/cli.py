@@ -133,6 +133,8 @@ def main(argv=None) -> int:
     args = p.parse_args(argv)
 
     base = load_config(args.config)
+    from . import logs
+    logs.setup(base.root_dir, "jobs" if getattr(args, "scheduled", False) else "app")
     config_path = Path(args.config) if args.config else Path.cwd() / DEFAULT_CONFIG_NAME
     if args.cmd == "project":
         return cli_project.handle(base, args)

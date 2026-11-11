@@ -15,6 +15,7 @@ Rules:
 
 from __future__ import annotations
 
+import logging
 import datetime as dt
 import json
 import re
@@ -31,6 +32,8 @@ from .holidays import refresh_year
 from .importer import run_import
 from .weekly_data import build_data
 from .workdays import WorkCalendar
+
+log = logging.getLogger(__name__)
 
 JOB = "weekly_report"
 EDITOR = "system (weekly report)"
@@ -292,6 +295,7 @@ def run_weekly(cfg, repo, sender, *, clock: dt.datetime | None = None, scheduled
     try:
         importer(cfg, repo, editor=EDITOR)
     except Exception as exc:
+        log.error("Weekly job: re-import of the Excel file failed", exc_info=True)
         msg = f"Re-import of the Excel file failed, so the weekly report was not sent: {exc}"
         res = record("failed", msg)
         alert_pmo(cfg, repo, sender, "Excel re-import failed - weekly report not sent", msg, send_date=iso,

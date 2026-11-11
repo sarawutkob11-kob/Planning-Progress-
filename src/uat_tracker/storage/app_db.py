@@ -16,8 +16,10 @@ class AppDb:
     def __init__(self, path: Path | str):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(self.path), isolation_level=None, timeout=10)
+        from .sqlite_repo import BUSY_TIMEOUT_S, configure_connection
+        self.conn = sqlite3.connect(str(self.path), isolation_level=None, timeout=BUSY_TIMEOUT_S)
         self.conn.row_factory = sqlite3.Row
+        configure_connection(self.conn)
         self._migrate()
 
     def _migrate(self) -> None:

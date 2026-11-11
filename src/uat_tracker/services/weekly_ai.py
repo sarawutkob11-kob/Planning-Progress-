@@ -13,11 +13,14 @@ top risks and follow-ups, in Thai and English, from the data the tracker compute
 
 from __future__ import annotations
 
+import logging
 import json
 import re
 from dataclasses import dataclass, field
 
 from ..config import DEFAULT_AI_MODEL, DEFAULT_AI_PRICES
+
+log = logging.getLogger(__name__)
 
 DEFAULT_MODEL = DEFAULT_AI_MODEL
 S_MODEL = "settings.ai_model"
@@ -202,6 +205,7 @@ def summarize(data: dict, *, model: str = DEFAULT_MODEL, key: str | None = None,
     except anthropic.APIStatusError as exc:
         return AiResult(False, error=_scrub(f"Claude API error {exc.status_code}: {exc.message}", key), model=model)
     except Exception as exc:                                    # never let the report fail because of the AI
+        log.warning("Claude API call failed: %s", _scrub(f"{type(exc).__name__}: {exc}", key))
         return AiResult(False, error=_scrub(f"Claude API call failed: {exc}", key), model=model)
 
     used = getattr(resp, "model", None) or model

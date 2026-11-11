@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import logging
 import dataclasses
 import re
 from datetime import date
@@ -26,6 +27,8 @@ from ..config import Config, apply_overrides
 from ..excel.sheets import SHEETS, TEST_PROGRESS, with_overrides
 from ..storage.app_db import AppDb
 from .auth import ADMIN, PMO, QA, name_key, now_iso
+
+log = logging.getLogger(__name__)
 
 FILE_PREFIX = "Planning Progress "
 INVALID_CHARS = re.compile(r'[/\\:*?"<>|]')
@@ -103,6 +106,8 @@ def open_project(base: Config, project: dict):
     cfg = project_config(base, project)
     repo = open_repository(cfg)
     set_project(project["name"])                      # email footer / PMO alert subject name the project
+    from .. import logs
+    logs.set_project(project["id"], project["name"])
     cfg = apply_overrides(cfg, repo)
     from .clear_project import warn_if_live            # TEMPORARY clear-project feature (see README)
     warn_if_live(cfg)
@@ -223,6 +228,7 @@ def validate_workbook(path: Path, header_overrides: dict | None = None) -> list[
         try:
             wb = openpyxl.load_workbook(copy, read_only=True, data_only=True)
         except Exception as exc:
+            log.warning("Not a readable Excel file: %s", path, exc_info=True)
             return [f"Not a readable Excel file: {exc}"]
         try:
             for name, sd in SHEETS.items():

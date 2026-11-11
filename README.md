@@ -246,7 +246,23 @@ The app is called **Planning Progress** everywhere (window, shortcut, scheduled 
   projects\p001\      tracker.db + attachments, backups, snapshots, previews of ONE project
   clear-project.log   "Clear project data" log;  clear-backups\  zip made before each clear
   migration-backup\   backups taken by the one-time migration
+  logs\app.log        the app and CLI commands (errors with full details)
+  logs\jobs.log       scheduled runs (daily alerts, weekly report: --scheduled)
 ```
+**Logs**: each file rotates at 5 MB, 5 old files kept (`app.log.1` ... `app.log.5`). Every line names the open
+project (`[p002:Test]`). Send `logs\` when reporting a problem. The Claude API key is never written there.
+
+**Databases** use SQLite WAL mode, so the app and a scheduled job can use the same project at the same time;
+you will see `tracker.db-wal` / `tracker.db-shm` next to `tracker.db` while it is open. Copy a database only with
+the app closed (or use the backups the app makes); copying `tracker.db` alone while it is open can miss the last
+changes.
+
+**Long actions** (Import from Excel, re-reading Excel after a conflict decision, restoring a workbook backup,
+Relink, Clear project data) run in the background behind a "please wait" box; the window stays responsive. If
+the sync is writing the workbook at that moment: "Sync running, try again in a moment".
+
+**Excel busy** (a cell being edited, a dialog open in Excel): each Excel call is retried for up to ~30 s
+(5 s when switching project), then the change waits in the normal retry queue.
 1 project = 1 Excel file. Users + roles, Fail X%, dry-run, daily send time, date window, weekly reports, sync,
 conflicts, history and attachments are per project. Shared: Claude API key (Credential Manager), holidays,
 PMO email, Outlook account, language.

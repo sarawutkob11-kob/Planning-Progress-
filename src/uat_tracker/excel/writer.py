@@ -16,9 +16,14 @@ rows are then found by App ID and every write is checked against it.
 from __future__ import annotations
 
 import datetime as dt
+import functools
 import json
+import logging
 import os
 import re
+import threading
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote
@@ -27,6 +32,8 @@ from openpyxl.utils import get_column_letter
 
 from ..parsing.headers import HeaderError, header_label, map_headers
 from .sheets import APP_ID_HEADER, APP_ID_KEY, DB_TO_SHEET_KEY, SheetDef
+
+log = logging.getLogger(__name__)
 
 EXCEL_DATE_FORMAT = "[$-409]dd-mmm-yyyy"      # English month names whatever the PC locale
 _EXCEL_EPOCH = dt.date(1899, 12, 30)
@@ -183,6 +190,7 @@ def write_workbook(opener, path: Path, sheet_defs, writes, rows) -> WriteReport:
     except (WriterError, HeaderError):
         raise
     except Exception as exc:
+        log.warning("Excel refused the write (retried later)", exc_info=True)
         # COM error from the Excel the user has open (busy uploading, a cell being typed in, a dialog):
         # retried later. Cells already written are harmless: the next read sees the app's value there.
         raise WorkbookBusy(f"Excel refused the change for now: {exc}") from exc
@@ -233,7 +241,7 @@ def excel_windows_for(path: Path) -> list[int]:
             if win32gui.GetClassName(h) == "XLMAIN" and title_stem(win32gui.GetWindowText(h)) == stem:
                 found.append(h)
         except Exception:
-            pass
+            log.info("Could not list Excel windows", exc_info=True)
         return True
 
     win32gui.EnumWindows(visit, None)
@@ -258,21 +266,91 @@ def _attach_via_window(hwnds: list[int], path: Path):
             if _same_workbook(wb, path):
                 return wb
     except Exception:
+        log.info("Could not attach to the open Excel window", exc_info=True)
         return None
     return None
 
 
+# --------------------------------------------------------------------------- Excel busy (Hardening D)
+# Excel answers COM calls with these while it is busy (a cell being edited, a dialog open, AutoSave upload).
+# The call is retried with a growing wait, up to COM_RETRY_BUDGET_S seconds; then WorkbookBusy -> the write
+# goes back to the normal retry queue (sync retry_minutes).
+RPC_E_CALL_REJECTED = 0x80010001
+RPC_E_SERVERCALL_RETRYLATER = 0x8001010A
+BUSY_HRESULTS = frozenset({RPC_E_CALL_REJECTED, RPC_E_SERVERCALL_RETRYLATER})
+COM_RETRY_BUDGET_S = 30.0
+COM_RETRY_DELAYS = (0.5, 1.0, 2.0, 4.0, 8.0)       # then 8 s each time until the budget is used
+_sleep = time.sleep                                  # tests replace this
+_budget = threading.local()
+
+
+def _hresult(exc: BaseException):
+    code = getattr(exc, "hresult", None)
+    if code is None and getattr(exc, "args", None):
+        code = exc.args[0]
+    return code & 0xFFFFFFFF if isinstance(code, int) else None
+
+
+def is_busy_error(exc: BaseException) -> bool:
+    return _hresult(exc) in BUSY_HRESULTS
+
+
+@contextmanager
+def com_retry_budget(seconds: float):
+    """Shorter (or longer) busy-retry budget for the COM calls made inside, on this thread only."""
+    old = getattr(_budget, "s", None)
+    _budget.s = seconds
+    try:
+        yield
+    finally:
+        _budget.s = old
+
+
+def com_call(fn, *args, **kwargs):
+    """Run one COM call; retry while Excel says it is busy, then raise WorkbookBusy."""
+    budget = getattr(_budget, "s", None)
+    budget = COM_RETRY_BUDGET_S if budget is None else budget
+    waited, attempt = 0.0, 0
+    while True:
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:
+            if not is_busy_error(exc):
+                raise
+            delay = COM_RETRY_DELAYS[min(attempt, len(COM_RETRY_DELAYS) - 1)]
+            if waited + delay > budget:
+                log.warning("Excel stayed busy for %.1f s; the change is queued for later", waited, exc_info=True)
+                raise WorkbookBusy(f"Excel is busy (tried for {waited:.0f} s); the change is written later") \
+                    from exc
+            log.info("Excel busy (%#x); retry in %.1f s", _hresult(exc), delay)
+            _sleep(delay)
+            waited += delay
+            attempt += 1
+
+
+def _busy_retry(method):
+    @functools.wraps(method)
+    def wrapper(*args, **kwargs):
+        return com_call(method, *args, **kwargs)
+    return wrapper
+
+
 class ComSheet:
+    """Each method is one or a few COM calls; it is retried while Excel is busy."""
+
     def __init__(self, ws):
         self.ws = ws
 
+    @_busy_retry
     def header_values(self):
         vals = self.ws.Range(self.ws.Cells(1, 1), self.ws.Cells(1, MAX_HEADER_COLS)).Value
         return list(vals[0])
 
+    @_busy_retry
     def insert_column(self, col):
         self.ws.Columns(col).Insert()
 
+    @_busy_retry
     def insert_row(self, row, below: bool = False):
         # below=True: take the format of the row underneath (row 2 of a new sheet sits under the header,
         # whose look must not be copied). -4121 = xlShiftDown, 1 = xlFormatFromRightOrBelow.
@@ -281,33 +359,42 @@ class ComSheet:
         else:
             self.ws.Rows(row).Insert()
 
+    @_busy_retry
     def set_formula(self, row, col, formula):
         self.ws.Cells(row, col).Formula = formula
 
+    @_busy_retry
     def last_row(self):
         ur = self.ws.UsedRange
         return int(ur.Row) + int(ur.Rows.Count) - 1
 
+    @_busy_retry
     def hide_column(self, col):
         self.ws.Columns(col).Hidden = True
 
+    @_busy_retry
     def get(self, row, col):
         return self.ws.Cells(row, col).Value
 
+    @_busy_retry
     def has_formula(self, row, col):
         return bool(self.ws.Cells(row, col).HasFormula)
 
+    @_busy_retry
     def set_date(self, row, col, d):
         c = self.ws.Cells(row, col)
         c.NumberFormat = EXCEL_DATE_FORMAT
         c.Value2 = float((d - _EXCEL_EPOCH).days)
 
+    @_busy_retry
     def set_number(self, row, col, n):
         self.ws.Cells(row, col).Value2 = n
 
+    @_busy_retry
     def set_text(self, row, col, text):
         self.ws.Cells(row, col).Value = "'" + text if text else ""     # ' = keep as text, not a date
 
+    @_busy_retry
     def clear(self, row, col):
         # Value = None, not ClearContents(): the Excel the PMO keeps open (AutoSave on) refuses
         # ClearContents through COM (0x800A03EC) but accepts this. Same result; formatting is kept.
@@ -318,6 +405,7 @@ def _autosave_on(wb) -> bool:
     try:
         return bool(wb.AutoSaveOn)
     except Exception:                                    # older Excel / local file: no AutoSave
+        log.info("AutoSave state not available (older Excel / local file)", exc_info=True)
         return False
 
 
@@ -342,14 +430,14 @@ class ComWorkbook:
             if self.wb is None:
                 raise WorkbookBusy("Workbook is open in Excel on this PC; changes are written after it "
                                    "is closed (or when Excel lets the app in)")
-            self.app = self.wb.Application
+            self.app = com_call(lambda: self.wb.Application)
         if self.wb is not None:
-            if self.wb.ReadOnly:
+            if com_call(lambda: self.wb.ReadOnly):
                 raise WorkbookLocked("Workbook is open read-only in Excel")
             # Unsaved changes: wait, unless AutoSave is on (approved 09-Nov-2026). With AutoSave Excel uploads
             # every edit anyway, and volatile formulas (TODAY()) leave Saved=False forever after opening.
             # A cell being typed in still blocks us: Excel refuses COM calls then, and the write is retried.
-            if not self.wb.Saved and not _autosave_on(self.wb):
+            if not com_call(lambda: self.wb.Saved) and not _autosave_on(self.wb):
                 raise WorkbookBusy("Workbook is open in Excel with unsaved changes (AutoSave off)")
             return
         try:
@@ -358,23 +446,26 @@ class ComWorkbook:
             self.app.Visible = False
             self.app.DisplayAlerts = False
             self.app.ScreenUpdating = False
-            self.wb = self.app.Workbooks.Open(str(self.path), 0, False)   # UpdateLinks=0, ReadOnly=False
+            self.wb = com_call(self.app.Workbooks.Open, str(self.path), 0, False)   # UpdateLinks=0, ReadOnly=False
+        except WorkbookBusy:
+            self.close()
+            raise
         except self._com_error as exc:
             self.close()
             raise WorkbookLocked(f"Excel could not open the workbook: {exc}") from exc
-        if self.wb.ReadOnly:
+        if com_call(lambda: self.wb.ReadOnly):
             self.close()
             raise WorkbookLocked("Workbook is locked by another program (opened read-only)")
 
     def sheet(self, name):
         try:
-            return ComSheet(self.wb.Worksheets(name))
+            return ComSheet(com_call(self.wb.Worksheets, name))
         except self._com_error as exc:
             raise HeaderError(f"Sheet '{name}' not found") from exc
 
     def save(self):
         try:
-            self.wb.Save()
+            com_call(self.wb.Save)
         except self._com_error as exc:
             raise WorkbookLocked(f"Save failed: {exc}") from exc
 
@@ -384,12 +475,12 @@ class ComWorkbook:
                 if self.wb is not None:
                     self.wb.Close(False)
             except Exception:
-                pass
+                log.warning("Closing the workbook failed", exc_info=True)
             try:
                 if self.app is not None:
                     self.app.Quit()
             except Exception:
-                pass
+                log.warning("Quitting Excel failed", exc_info=True)
         self.wb = self.app = None
 
 

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 import datetime as dt
 import threading
 
@@ -24,6 +25,8 @@ from .screens.test_progress import TestProgressScreen
 from .screens.uat_plan import UatPlanScreen
 from .weekly import WeeklyScreen
 from .widgets import DatePicker, button, label
+
+log = logging.getLogger(__name__)
 
 NAV = (("dashboard", "nav.dashboard"), ("uat", "nav.uat"), ("tp", "nav.tp"), ("defects", "nav.defects"),
        ("history", "nav.history"), ("conflicts", "nav.conflicts"), ("weekly", "nav.weekly"), ("settings", "nav.settings"))
@@ -323,24 +326,27 @@ class MainWindow(QMainWindow):
             return
         if st[0] == "paused":
             from ..services.importer import run_import
-            from .dialogs import error, info
-            QApplication.setOverrideCursor(Qt.WaitCursor)
-            try:
-                res = run_import(self.ctx.cfg, self.ctx.repo, editor=self.ctx.editor, force=True)
-            except Exception as exc:
-                QApplication.restoreOverrideCursor()
-                error(self, str(exc))
-                return
-            QApplication.restoreOverrideCursor()
-            info(self, t("uat.imported", n=sum(x.created + x.updated for x in res.sheets.values())))
-            if self.ctx.app:
-                self.ctx.app.restart_sync()
-            self.refresh_current()
+            from .dialogs import info
+            from .worker import project_repo, run_in_worker, sync_locked
+            cfg, editor = self.ctx.cfg, self.ctx.editor
+
+            def job():
+                with project_repo(cfg) as repo, sync_locked(cfg):
+                    res = run_import(cfg, repo, editor=editor, force=True)
+                    return sum(x.created + x.updated for x in res.sheets.values())
+
+            def done(n):
+                info(self, t("uat.imported", n=n))
+                if self.ctx.app:
+                    self.ctx.app.restart_sync()
+                self.refresh_current()
+            return run_in_worker(self, t("work.reading"), job, done, name="import")
         elif st[0] == "missing" and self.ctx.app:
             from .projects import relink_flow
             app = self.ctx.app
-            if relink_flow(self, app.base, app.appdb, app.person, app.appdb.get_project(self.ctx.cfg.project_id)):
-                app.open_project(self.ctx.cfg.project_id)
+            pid = self.ctx.cfg.project_id
+            relink_flow(self, app.base, app.appdb, app.person, app.appdb.get_project(pid),
+                        on_done=lambda: app.open_project(pid))
 
     def _tick(self):
         if QApplication.activeModalWidget() is not None:   # never rebuild a screen under an open dialog

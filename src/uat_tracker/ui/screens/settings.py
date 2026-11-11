@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from PySide6.QtCore import QTime
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout,
                                QHeaderView, QLineEdit, QTableWidget, QTableWidgetItem, QTimeEdit)
@@ -18,6 +19,8 @@ from ..dialogs import confirm, error, info
 from ..i18n import t
 from ..widgets import DatePicker, button, card, label
 from .base import Screen, clear_layout
+
+log = logging.getLogger(__name__)
 
 
 def _table(headers, rows, height=220) -> QTableWidget:
@@ -206,8 +209,9 @@ class SettingsScreen(Screen):
     def _relink(self):
         from ..projects import relink_flow
         app = self.ctx.app
-        if relink_flow(self, app.base, app.appdb, app.person, app.appdb.get_project(self.ctx.cfg.project_id)):
-            app.open_project(self.ctx.cfg.project_id)
+        pid = self.ctx.cfg.project_id
+        relink_flow(self, app.base, app.appdb, app.person, app.appdb.get_project(pid),
+                    on_done=lambda: app.open_project(pid))
 
     def _archive(self):
         app, cfg = self.ctx.app, self.ctx.cfg
@@ -326,10 +330,14 @@ class SettingsScreen(Screen):
         b = self.backups[row]
         if not confirm(self, t("set.restore_q", id=b["id"])):
             return
-        try:
-            SyncService(self.ctx.cfg, self.ctx.repo).restore(b["id"], self.ctx.actor)
-        except Exception as exc:
-            error(self, str(exc))
-            return
-        info(self, t("done"))
-        self.ctx.refresh_all()
+        from ..worker import project_repo, run_in_worker
+        cfg, actor = self.ctx.cfg, self.ctx.actor
+
+        def job():
+            with project_repo(cfg) as repo:
+                return SyncService(cfg, repo).restore(b["id"], actor)
+
+        def done(_):
+            info(self, t("done"))
+            self.ctx.refresh_all()
+        return run_in_worker(self, t("work.restoring"), job, done, name="restore-backup")

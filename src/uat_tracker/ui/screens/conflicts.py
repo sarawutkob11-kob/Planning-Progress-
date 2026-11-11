@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 
 from PySide6.QtWidgets import (QComboBox, QDialog, QFormLayout, QGridLayout, QHBoxLayout, QLineEdit, QVBoxLayout,
@@ -20,6 +21,8 @@ from ..dialogs import error, info
 from ..i18n import t
 from ..widgets import DatePicker, button, card, label, tag
 from .base import ChipRow, Screen, clear_layout
+
+log = logging.getLogger(__name__)
 
 PROB_TAG = {"ambiguous_date": "Amber", "out_of_window": "neutral", "bad_date": "Red",
             "date_in_time_column": "Today", "unknown_status": "Amber", "bad_number": "Red"}
@@ -190,13 +193,21 @@ class ConflictsScreen(Screen):
         try:
             resolve_conflict(self.ctx.cfg, self.ctx.repo, c["id"], choice, actor=self.ctx.actor,
                              reason=reason, new_value=new_value)
-            SyncService(self.ctx.cfg, self.ctx.repo).pull(force=True)     # apply / re-check against Excel
         except (ResolveError, PermissionDenied) as exc:
             error(self, str(exc))
             return
-        except Exception as exc:                                         # Excel unreadable: decision is saved
-            error(self, str(exc))
-        self.ctx.refresh_all()
+        from ..worker import friendly, project_repo, run_in_worker, sync_locked
+        cfg = self.ctx.cfg
+
+        def job():                                                       # apply / re-check against Excel
+            with project_repo(cfg) as repo, sync_locked(cfg):
+                SyncService(cfg, repo).pull(force=True)
+
+        def failed(exc):                                                 # Excel unreadable: decision is saved
+            error(self, friendly(exc))
+            self.ctx.refresh_all()
+        return run_in_worker(self, t("work.reading"), job, lambda _: self.ctx.refresh_all(), failed,
+                             name="resolve-pull")
 
     # ------------------------------------------------------------------ review queue
     def _review_row(self, r) -> QWidget:

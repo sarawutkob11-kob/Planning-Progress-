@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor, QFont
 from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QHeaderView, QScrollArea, QSplitter, QTreeWidget,
@@ -12,10 +13,12 @@ from ...excel.sheets import UAT_PLAN
 from ...parsing.dates import fmt
 from ...services import views
 from ...services.sync import SyncService
-from ..dialogs import AddTaskDialog, UpdateDialog, error, info
+from ..dialogs import AddTaskDialog, UpdateDialog, info
 from ..i18n import t
 from ..widgets import bar, button, card, hline, label, tag
 from .base import ChipRow, Screen, clear_layout
+
+log = logging.getLogger(__name__)
 
 
 class UatPlanScreen(Screen):
@@ -207,11 +210,15 @@ class UatPlanScreen(Screen):
             self.ctx.refresh_all()
 
     def _import(self):
-        try:
-            res = SyncService(self.ctx.cfg, self.ctx.repo).pull(force=True)
-        except Exception as exc:
-            error(self, str(exc))
-            return
-        n = sum(s.updated + s.created + s.removed for s in res.sheets.values()) if res else 0
-        info(self, t("uat.imported", n=n))
-        self.ctx.refresh_all()
+        from ..worker import project_repo, run_in_worker, sync_locked
+        cfg = self.ctx.cfg
+
+        def job():
+            with project_repo(cfg) as repo, sync_locked(cfg):
+                res = SyncService(cfg, repo).pull(force=True)
+                return sum(s.updated + s.created + s.removed for s in res.sheets.values()) if res else 0
+
+        def done(n):
+            info(self, t("uat.imported", n=n))
+            self.ctx.refresh_all()
+        return run_in_worker(self, t("work.reading"), job, done, name="import")

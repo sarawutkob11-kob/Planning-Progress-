@@ -21,6 +21,7 @@ from uat_tracker.ui.context import Ctx  # noqa: E402
 from uat_tracker.ui.dialogs import UpdateDialog  # noqa: E402
 from uat_tracker.ui.main_window import NAV, MainWindow  # noqa: E402
 from uat_tracker.ui.widgets import QSS, DatePicker  # noqa: E402
+from uat_tracker.ui.worker import wait_for_workers  # noqa: E402
 
 import datetime as dt  # noqa: E402
 
@@ -44,6 +45,7 @@ def win(qapp, cfg, repo):
     ctx.as_of = dt.date(2026, 11, 6)
     w = MainWindow(ctx, start_sync=False)
     yield w
+    wait_for_workers()
     w.close()
 
 
@@ -139,9 +141,14 @@ def test_conflict_center_resolve_and_review(win, monkeypatch):
     c = win.ctx.repo.open_conflicts()[0]
     scr._resolve(c, "app", "")                                   # no reason -> nothing happens
     assert win.ctx.repo.open_conflicts()
-    monkeypatch.setattr(conf_mod, "SyncService", lambda cfg, repo: svc)
+    # the re-read runs in a worker thread with its own DB connection
+    monkeypatch.setattr(conf_mod, "SyncService",
+                        lambda cfg, repo: SyncService(cfg, repo, opener=OpenpyxlWorkbook, sender=FakeSender()))
+    errors = []
+    monkeypatch.setattr(conf_mod, "error", lambda *a: errors.append(a[-1]))
     scr._resolve(c, "app", "app is right")
-    assert win.ctx.repo.open_conflicts() == []
+    wait_for_workers()
+    assert errors == [] and win.ctx.repo.open_conflicts() == []
     # review queue: one-click suggestion
     monkeypatch.setattr(conf_mod, "info", lambda *a: None)
     scr._pick("rev")

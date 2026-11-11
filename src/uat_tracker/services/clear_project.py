@@ -161,8 +161,14 @@ def restore_backup(cfg, zip_path: Path, *, editor: str) -> dict:
         if man.get("project_id") != cfg.project_id:
             raise ClearError(f"This backup is for project {man.get('project_id')!r}, not {cfg.project_id!r}")
         stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-        if cfg.db_path.exists():
-            shutil.copy2(cfg.db_path, cfg.db_path.with_name(f"tracker.db.before-restore-{stamp}"))
+        if cfg.db_path.exists():                       # backup API: includes what is still in the -wal file
+            keep = sqlite3.connect(cfg.db_path)
+            out = sqlite3.connect(cfg.db_path.with_name(f"tracker.db.before-restore-{stamp}"))
+            try:
+                keep.backup(out)
+            finally:
+                out.close()
+                keep.close()
         tmp = cfg.db_path.with_name(f".restore-{stamp}.db")
         tmp.write_bytes(z.read("tracker.db"))
         src = sqlite3.connect(tmp)

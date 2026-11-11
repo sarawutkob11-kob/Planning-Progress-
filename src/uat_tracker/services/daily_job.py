@@ -12,6 +12,7 @@ Survives restarts: all state is in the DB (job_run, traffic_light_history, email
 
 from __future__ import annotations
 
+import logging
 import datetime as dt
 from dataclasses import dataclass, field
 
@@ -27,6 +28,8 @@ from .holidays import refresh_year
 from .importer import run_import
 from .traffic_light import MISSING, effective_previous, r3_qualifies, record_colors
 from .workdays import WorkCalendar
+
+log = logging.getLogger(__name__)
 
 JOB = "daily_alerts"
 EDITOR = "system (daily job)"
@@ -114,6 +117,7 @@ def run_daily(cfg, repo, sender, *, clock: dt.datetime | None = None, scheduled:
     try:
         importer(cfg, repo, editor=EDITOR)
     except Exception as exc:                       # file locked, header changed, ...
+        log.error("Daily job: re-import of the Excel file failed", exc_info=True)
         msg = f"Re-import of the Excel file failed, so no emails were sent today: {exc}"
         with repo.transaction():
             repo.finish_job(jid, finished_at=_now(dt.datetime.now()), result="failed", message=msg)
@@ -154,6 +158,7 @@ def run_daily(cfg, repo, sender, *, clock: dt.datetime | None = None, scheduled:
             fr = sync.flush(force=True)
             summary += f"; Excel write: {fr.result}" + (f" ({fr.message})" if fr.message else "")
         except Exception as exc:                  # emails already went out; report, don't fail the day
+            log.error("Daily job: Excel write after the emails failed", exc_info=True)
             summary += f"; Excel write error: {exc}"
     with repo.transaction():
         repo.finish_job(jid, finished_at=_now(dt.datetime.now()), result="ok", message=summary)

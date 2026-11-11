@@ -5,6 +5,7 @@ Idempotent: importing an unchanged workbook writes no item rows, audit entries, 
 
 from __future__ import annotations
 
+import logging
 import getpass
 import html
 import json
@@ -24,6 +25,8 @@ from ..parsing.text import cell_text
 from .binding import alt_key_json, bind, fingerprints
 from .normalize import NORMALIZERS
 from .values import canon
+
+log = logging.getLogger(__name__)
 
 REASON_IMPORT = "Excel import"
 REASON_SYNC = "Changed in Excel (sync)"
@@ -134,6 +137,7 @@ def run_import(cfg: Config, repo, editor: str | None = None, source: Path | None
                 _sync_sheet(repo, name, items, st, editor, run_id, _now(), channel, mtime)
                 stats[name] = st
     except Exception as exc:
+        log.error("Import failed", exc_info=True)
         repo.finish_run(run_id, finished_at=_now(), result="failed", message=str(exc),
                         source_sha256=sha, snapshot_path=str(snapshot) if snapshot else None)
         raise

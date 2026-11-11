@@ -3,10 +3,10 @@ window shown when the user has no project yet."""
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QApplication, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QLineEdit,
+from PySide6.QtWidgets import (QDialog, QFileDialog, QFormLayout, QHBoxLayout, QLineEdit,
                                QMainWindow, QVBoxLayout, QWidget)
 
 from ..services import projects
@@ -14,6 +14,8 @@ from ..services.importer import run_import
 from .dialogs import confirm, error, info
 from .i18n import t
 from .widgets import button, card, label
+
+log = logging.getLogger(__name__)
 
 DANGER_QSS = ("QPushButton{background:#C62828;color:white;border:none;border-radius:8px;padding:8px 16px;"
               "font-weight:700;} QPushButton:disabled{background:#E8B4B4;}")
@@ -98,7 +100,8 @@ class NewProjectDialog(QDialog):
         self.accept()
 
 
-def import_project_flow(parent, base, appdb, person) -> dict | None:
+def import_project_flow(parent, base, appdb, person, on_done=None) -> dict | None:
+    """The project is created here; reading its workbook runs in a worker, then on_done(project)."""
     path, _ = QFileDialog.getOpenFileName(parent, t("proj.import_title"), str(Path.home()), "Excel (*.xlsx)")
     if not path:
         return None
@@ -113,33 +116,48 @@ def import_project_flow(parent, base, appdb, person) -> dict | None:
     except projects.ProjectError as exc:
         error(parent, str(exc))
         return None
-    cfg, repo = projects.open_project(base, p)
-    QApplication.setOverrideCursor(Qt.WaitCursor)
-    try:
-        res = run_import(cfg, repo, editor=person.editor)
-        summary = ", ".join(f"{s} {st.rows}" for s, st in res.sheets.items())
-    except Exception as exc:                     # file readable but import failed: project kept, shown as error
-        summary = str(exc)
-    finally:
-        QApplication.restoreOverrideCursor()
-        repo.close()
-    info(parent, t("proj.imported", n=p["name"], r=summary))
+    from .worker import run_in_worker
+
+    def job():                                   # own connections: runs in a worker thread
+        cfg, repo = projects.open_project(base, p)
+        try:
+            res = run_import(cfg, repo, editor=person.editor)
+            return ", ".join(f"{s} {st.rows}" for s, st in res.sheets.items())
+        except Exception as exc:                 # file readable but import failed: project kept, shown as error
+            log.error("Import of the new project failed", exc_info=True)
+            return str(exc)
+        finally:
+            repo.close()
+
+    def done(summary):
+        info(parent, t("proj.imported", n=p["name"], r=summary))
+        if on_done:
+            on_done(p)
+    run_in_worker(parent, t("work.reading"), job, done, name="import-project")
     return p
 
 
-def relink_flow(parent, base, appdb, person, project) -> bool:
+def relink_flow(parent, base, appdb, person, project, on_done=None):
+    """Pick the moved / renamed file; the check (reads the workbook) runs in a worker. on_done() after success."""
     start = Path(project["excel_path"]).parent
     path, _ = QFileDialog.getOpenFileName(parent, t("proj.relink"), str(start if start.exists() else Path.home()),
                                           "Excel (*.xlsx)")
     if not path:
-        return False
-    try:
-        summary = projects.relink(base, appdb, person, project["id"], Path(path))
-    except projects.ProjectError as exc:
-        error(parent, str(exc))
-        return False
-    info(parent, t("proj.relinked", s=summary))
-    return True
+        return None
+    from .worker import run_in_worker
+
+    def job():                                   # app.db connection of this thread
+        db = projects.open_app_db(base)
+        try:
+            return projects.relink(base, db, person, project["id"], Path(path))
+        finally:
+            db.close()
+
+    def done(summary):
+        info(parent, t("proj.relinked", s=summary))
+        if on_done:
+            on_done()
+    return run_in_worker(parent, t("work.relinking"), job, done, name="relink")
 
 
 class ClearProjectDialog(QDialog):
@@ -175,15 +193,25 @@ class ClearProjectDialog(QDialog):
         outer.addLayout(row)
 
     def _go(self):
-        from ..services.clear_project import ClearError, clear_project
-        try:
-            res = clear_project(self.ctx.cfg, self.ctx.repo, self.ctx.actor, typed_name=self.typed.text())
-        except ClearError as exc:
-            error(self, str(exc))
-            return
-        self.result_zip = res.backup_zip
-        info(self, t("danger.done", p=res.backup_zip))
-        self.accept()
+        from ..services.clear_project import clear_project
+        from .worker import project_repo, run_in_worker
+        cfg, actor, typed = self.ctx.cfg, self.ctx.actor, self.typed.text()
+        self.go.setEnabled(False)
+
+        def job():
+            with project_repo(cfg) as repo:
+                return clear_project(cfg, repo, actor, typed_name=typed)
+
+        def done(res):
+            self.result_zip = res.backup_zip
+            info(self, t("danger.done", p=res.backup_zip))
+            self.accept()
+
+        def failed(exc):
+            self.go.setEnabled(True)
+            from .worker import friendly
+            error(self, friendly(exc))
+        return run_in_worker(self, t("work.clearing"), job, done, failed, name="clear-project")
 
 
 class NoProjectWindow(QMainWindow):

@@ -12,6 +12,7 @@ A user without any project sees a page to create / import one (Admin or PMO) or 
 
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 
@@ -27,7 +28,10 @@ from .i18n import set_lang
 from .main_window import MainWindow, SyncThread
 from .widgets import QSS
 
+log = logging.getLogger(__name__)
+
 APP_NAME = "Planning Progress"
+SWITCH_COM_BUDGET_S = 5.0      # busy-Excel retry when switching project (pending changes stay queued anyway)
 
 
 class AppController(QObject):
@@ -133,8 +137,11 @@ class AppController(QObject):
                 QApplication.setOverrideCursor(Qt.WaitCursor)
                 try:
                     if self.ctx.repo.all_pending():
-                        SyncService(self.ctx.cfg, self.ctx.repo).flush(force=True)
+                        from ..excel.writer import com_retry_budget
+                        with com_retry_budget(SWITCH_COM_BUDGET_S):     # UI thread: wait less for a busy Excel
+                            SyncService(self.ctx.cfg, self.ctx.repo).flush(force=True)
                 except Exception:
+                    log.warning("Writing pending changes before switching project failed; they stay queued", exc_info=True)
                     pass                                 # stays queued; retried when the project is opened again
                 finally:
                     QApplication.restoreOverrideCursor()
@@ -161,9 +168,8 @@ class AppController(QObject):
 
     def import_project(self) -> None:
         from .projects import import_project_flow
-        p = import_project_flow(self.win, self.base, self.appdb, self.person)
-        if p:
-            self.open_project(p["id"])
+        import_project_flow(self.win, self.base, self.appdb, self.person,
+                            on_done=lambda p: self.open_project(p["id"]))
 
     def quit(self) -> None:
         if self.sync_thread is not None:

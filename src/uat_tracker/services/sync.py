@@ -14,6 +14,7 @@ Only one process writes at a time (lock file in the data folder).
 
 from __future__ import annotations
 
+import logging
 import datetime as dt
 import json
 import msvcrt
@@ -33,6 +34,8 @@ from ..excel.writer import (ROW_FIELD, CellWrite, ComWorkbook, WorkbookBusy, Wor
                             excel_windows_for, write_workbook)
 from .importer import S_PAUSED, ImportResult, run_import
 from .values import derive_excel_value
+
+log = logging.getLogger(__name__)
 
 SYNC_EDITOR = "system (sync)"
 S_BLOCKED = "sync.blocked"            # setting: reason text when writes are stopped
@@ -134,6 +137,7 @@ class SyncService:
         try:
             res = run_import(self.cfg, self.repo, channel=CHANNEL_EXCEL_SYNC)
         except Exception as exc:
+            log.error("Sync: reading Excel failed", exc_info=True)
             self._log("pull", "failed", str(exc))
             raise
         changed = sum(s.updated + s.created + s.removed for s in res.sheets.values())
@@ -214,6 +218,7 @@ class SyncService:
         try:
             self.pull()                               # file must match what the rows refer to
         except Exception as exc:
+            log.warning("Sync: could not read Excel before writing", exc_info=True)
             return self._retry(due, f"Could not read Excel before writing: {exc}", None)
         due = self._due()
         if not due:
@@ -445,6 +450,7 @@ class SyncService:
                     if fr.result not in ("nothing", "waiting", "busy"):
                         on_event(f"{self._now()} write: {fr.result} {fr.message}")
                 except Exception as exc:              # keep watching; the error is logged
+                    log.error("Sync watch loop error (still watching)", exc_info=True)
                     self._log("error", "failed", str(exc))
                     on_event(f"{self._now()} ERROR {exc}")
                 stop.wait(1.0)

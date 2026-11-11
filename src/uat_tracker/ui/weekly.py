@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import json
 
 from PySide6.QtCore import Qt, QThread, Signal
@@ -15,6 +16,8 @@ from .dialogs import error, info
 from .i18n import t
 from .screens.base import Screen
 from .widgets import button, label
+
+log = logging.getLogger(__name__)
 
 
 class GenerateWorker(QThread):
@@ -34,12 +37,14 @@ class GenerateWorker(QThread):
             try:
                 SyncService(self.cfg, repo).pull()              # latest Excel data first
             except Exception as exc:                            # keep going on the data we have, but say so
+                log.warning("Weekly report: Excel could not be re-read", exc_info=True)
                 self.note = f"Excel could not be re-read ({exc}); the report uses the data last read."
             g = weekly_report.generate(self.cfg, repo, actor=self.actor, as_of=self.as_of, trigger="manual")
             self.done.emit(g.report_id)
         except PermissionDenied as exc:
             self.failed.emit(str(exc))
         except Exception as exc:
+            log.error("Weekly report failed", exc_info=True)
             self.failed.emit(f"Weekly report failed: {exc}")
         finally:
             repo.close()

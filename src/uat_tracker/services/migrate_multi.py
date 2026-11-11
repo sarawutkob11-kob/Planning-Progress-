@@ -18,6 +18,7 @@ Order (nothing is deleted; the old folder stays as it is):
 
 from __future__ import annotations
 
+import logging
 import datetime as dt
 import json
 import shutil
@@ -32,8 +33,10 @@ from .auth import now_iso
 from .projects import ProjectError, file_name_for, open_app_db, open_project
 from .traffic_light import compute
 
+log = logging.getLogger(__name__)
+
 SHARED_KEYS = ("settings.pmo_email", "ui.lang", "settings.ai_model")
-SKIP_FILES = {"sync.lock", "profile.json"}
+SKIP_FILES = {"sync.lock", "profile.json", "tracker.db-wal", "tracker.db-shm"}   # the DB is copied with backup()
 
 
 @dataclass
@@ -223,6 +226,7 @@ def migrate(base, old_dir: Path, *, project_name: str = "RAMC UAT", confirm: boo
         if not rep.same:
             raise ProjectError("Counts or Traffic Lights differ after the move")
     except Exception as exc:
+        log.error("Migration failed, rolling back", exc_info=True)
         if renamed and rep.new_excel.exists() and not rep.old_excel.exists():
             rep.new_excel.rename(rep.old_excel)
         appdb = open_app_db(base)

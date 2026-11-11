@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import hashlib
 import os
 import shutil
@@ -14,6 +15,8 @@ import openpyxl
 from ..parsing.headers import HeaderMap, map_headers
 from ..parsing.text import is_blank
 from .sheets import SheetDef
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -44,6 +47,7 @@ def open_shared(path: Path):
     try:
         h = win32file.CreateFile(str(path), win32file.GENERIC_READ, share, None, win32file.OPEN_EXISTING, 0, None)
     except Exception as exc:                             # pywintypes.error -> same type callers expect
+        log.warning("Cannot open %s for reading", path, exc_info=True)
         raise PermissionError(f"Cannot read {path}: {exc}") from exc
     fd = msvcrt.open_osfhandle(h.Detach(), os.O_RDONLY)
     return os.fdopen(fd, "rb")

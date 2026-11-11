@@ -14,6 +14,16 @@ from ..excel.sheets import DEFECT_LIST, TEST_PROGRESS, UAT_PLAN
 
 TABLES = {UAT_PLAN: "uat_task", TEST_PROGRESS: "test_progress", DEFECT_LIST: "defect"}
 META_COLUMNS = ("id", "excel_row", "fingerprint", "alt_key", "active", "created_at", "updated_at")
+# Hardening D: the app (GUI), its sync thread and the scheduled job use the same DB files at the same time.
+# WAL lets readers and one writer work together; busy_timeout waits for a short write lock instead of failing.
+BUSY_TIMEOUT_S = 10.0
+
+
+def configure_connection(conn: sqlite3.Connection) -> None:
+    conn.execute(f"PRAGMA busy_timeout = {int(BUSY_TIMEOUT_S * 1000)}")
+    conn.execute("PRAGMA journal_mode = WAL")          # stored in the file: every later connection uses it
+
+
 AUDIT_HASH_FIELDS = ("ts", "editor", "channel", "sheet", "item_id", "field",
                      "old_value", "new_value", "reason", "import_run_id")
 
@@ -23,8 +33,9 @@ class SqliteRepository:
         """shared: app.db (multi-project). When given, holidays and SHARED_SETTING_KEYS are read from and
         written to it; everything else stays in this project's own DB."""
         self.path = str(path)
-        self.conn = sqlite3.connect(self.path, isolation_level=None)
+        self.conn = sqlite3.connect(self.path, isolation_level=None, timeout=BUSY_TIMEOUT_S)
         self.conn.row_factory = sqlite3.Row
+        configure_connection(self.conn)
         self.conn.execute("PRAGMA foreign_keys = ON")
         self._migrate()
         self.shared = str(shared) if shared else None

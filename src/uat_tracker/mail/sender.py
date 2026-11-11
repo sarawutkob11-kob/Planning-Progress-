@@ -5,8 +5,11 @@ OutlookSender attaches to an Outlook that is ALREADY running and never starts it
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Protocol
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -55,6 +58,7 @@ class OutlookSender:
         try:
             self._app = win32com.client.GetActiveObject("Outlook.Application")
         except Exception as exc:              # pywintypes.com_error: not running
+            log.warning("Outlook is not running", exc_info=True)
             raise OutlookNotRunning("Outlook is not running on this PC") from exc
         return self._app
 
@@ -86,6 +90,7 @@ class OutlookSender:
         except SendError:
             raise
         except Exception as exc:
+            log.error("Outlook send failed", exc_info=True)
             raise SendError(f"Outlook send failed: {exc}") from exc
 
 

@@ -5,10 +5,13 @@ Admin or PMO of any project; anyone while there is no project yet)."""
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from .services import projects
 from .services.profile import read_profile_data
+
+log = logging.getLogger(__name__)
 
 
 def add_parsers(sub) -> None:
@@ -112,6 +115,7 @@ def handle(base, args) -> int:
             print(f"Restored backup of {man['created_at']} into {cfg.db_path}")
             return 0
     except Exception as exc:
+        log.exception("project command failed")
         from .services.clear_project import ClearError
         if not isinstance(exc, (projects.ProjectError, ClearError)):
             raise

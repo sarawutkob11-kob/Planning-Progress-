@@ -107,7 +107,7 @@ class SettingsScreen(Screen):
         self.has_key = bool(weekly_ai.KEYS.get())
         self.api_key.setPlaceholderText(t("set.api_saved") if self.has_key else t("set.api_note"))
         form.addRow(t("set.api_key"), self.api_key)
-        self.ai_model = QLineEdit(weekly_ai.model_of(repo))
+        self.ai_model = QLineEdit(weekly_ai.model_of(repo, cfg))
         form.addRow(t("set.ai_model"), self.ai_model)
         form.addRow("", label(t("set.ai_policy"), "muted", wrap_text=True))
         cl.addLayout(form)
@@ -285,8 +285,11 @@ class SettingsScreen(Screen):
                           email_time=self.time.time().toString("HH:mm"),
                           excel_path=excel if excel and excel != str(cfg.excel_path) else None)
             key = self.api_key.text().strip()
-            if self.manager and (key or self.ai_model.text().strip() != weekly_ai.model_of(repo)):
-                save_ai_settings(repo, self.ctx.actor, model=self.ai_model.text(), api_key=key or None)
+            typed = self.ai_model.text().strip()
+            if self.manager and (key or typed != weekly_ai.model_of(repo, cfg)):
+                # unchanged model: keep what is stored (blank = follow config [weekly_ai] model)
+                model = typed if typed != weekly_ai.model_of(repo, cfg) else (repo.get_setting(weekly_ai.S_MODEL) or "")
+                save_ai_settings(repo, self.ctx.actor, model=model, api_key=key or None)
         except (PermissionDenied, projects.ProjectError) as exc:
             error(self, str(exc))
             return

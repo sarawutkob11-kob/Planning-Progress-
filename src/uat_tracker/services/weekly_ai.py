@@ -2,8 +2,10 @@
 top risks and follow-ups, in Thai and English, from the data the tracker computed.
 
 - API key: Windows Credential Manager (per Windows user), never in config.toml / the DB / logs / Excel.
-- Model: Settings (default claude-opus-5-5, effort medium). Structured output (JSON schema). Server-side
-  refusal fallback "default" on the models that support it.
+- Model: Settings > Claude model, else config [weekly_ai] model, else DEFAULT_MODEL (the one documented default,
+  config.DEFAULT_AI_MODEL). Effort medium. Structured output (JSON schema). Server-side fallback "default" when
+  [weekly_ai] server_fallback = true; if the model rejects it (400) the call is made once more without it.
+- Unknown / retired model (404): clear error, the report is made without the AI part.
 - Timeout 60 s, 2 retries (the SDK's own retry of 408/409/429/5xx and connection errors).
 - Every number in the AI text must appear in the input data; otherwise the AI part is not used.
 - Tokens + cost are returned for the report log.
@@ -15,19 +17,15 @@ import json
 import re
 from dataclasses import dataclass, field
 
-DEFAULT_MODEL = "claude-opus-5-5"
+from ..config import DEFAULT_AI_MODEL, DEFAULT_AI_PRICES
+
+DEFAULT_MODEL = DEFAULT_AI_MODEL
 S_MODEL = "settings.ai_model"
 KEY_TARGET = "PlanningProgress/anthropic"
 LEGACY_KEY_TARGET = "UATTracker/anthropic"        # before the rename; moved on first read
 TIMEOUT_S = 60.0
 MAX_RETRIES = 2
-FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5"}
-PRICES = {                       # USD per 1M tokens (input, output), Anthropic first-party rates
-    "claude-fable-5-1": (10.0, 50.0), "claude-fable-5": (10.0, 50.0),
-    "claude-opus-5-5": (4.0, 20.0), "claude-opus-5": (5.0, 25.0), "claude-opus-4-8": (5.0, 25.0),
-    "claude-sonnet-5-5": (2.0, 10.0), "claude-sonnet-5": (2.0, 10.0),
-    "claude-haiku-5-5": (0.10, 0.50),
-}
+FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
 SYSTEM = (
     "You write the executive summary of a weekly UAT progress report for a bank IT project (the project name is in the data).\n"
@@ -95,8 +93,10 @@ class WinCredKeyStore:
 KEYS = WinCredKeyStore()
 
 
-def model_of(repo) -> str:
-    return (repo.get_setting(S_MODEL) or DEFAULT_MODEL).strip() or DEFAULT_MODEL
+def model_of(repo, cfg=None) -> str:
+    """Settings > Claude model, else config [weekly_ai] model, else the documented default."""
+    configured = (getattr(getattr(cfg, "weekly_ai", None), "model", "") or "").strip()
+    return (repo.get_setting(S_MODEL) or "").strip() or configured or DEFAULT_MODEL
 
 
 # --------------------------------------------------------------------------- number check
@@ -155,8 +155,8 @@ class AiResult:
     extra: dict = field(default_factory=dict)
 
 
-def cost_of(model: str, input_tokens: int, output_tokens: int) -> float | None:
-    p = PRICES.get(model)
+def cost_of(model: str, input_tokens: int, output_tokens: int, prices: dict | None = None) -> float | None:
+    p = (DEFAULT_AI_PRICES if prices is None else prices).get(model)
     if p is None:
         return None
     return round(input_tokens * p[0] / 1_000_000 + output_tokens * p[1] / 1_000_000, 6)
@@ -166,7 +166,8 @@ def _scrub(msg: str, key: str | None) -> str:
     return msg.replace(key, "***") if key else msg
 
 
-def summarize(data: dict, *, model: str = DEFAULT_MODEL, key: str | None = None, client=None) -> AiResult:
+def summarize(data: dict, *, model: str = DEFAULT_MODEL, key: str | None = None, client=None,
+              server_fallback: bool = True, prices: dict | None = None) -> AiResult:
     """Ask Claude for the summary. Never raises: problems come back as AiResult(ok=False, error=...)."""
     import anthropic
     key = key if key is not None else KEYS.get()
@@ -181,9 +182,17 @@ def summarize(data: dict, *, model: str = DEFAULT_MODEL, key: str | None = None,
         kwargs = dict(model=model, max_tokens=16000, system=SYSTEM,
                       messages=[{"role": "user", "content": user}],
                       output_config={"effort": "medium", "format": {"type": "json_schema", "schema": SCHEMA}})
-        if model in FALLBACK_MODELS:
-            kwargs.update(betas=["server-side-fallback-2026-07-01"], fallbacks="default")
-        resp = client.beta.messages.create(**kwargs)
+        if server_fallback:
+            try:
+                resp = client.beta.messages.create(**kwargs, betas=[FALLBACK_BETA], fallbacks="default")
+            except anthropic.BadRequestError:              # this model does not take server-side fallback
+                resp = client.beta.messages.create(**kwargs)
+        else:
+            resp = client.beta.messages.create(**kwargs)
+    except anthropic.NotFoundError:
+        return AiResult(False, model=model, error=(
+            f"Claude model '{model}' was not found or is retired. Set another model in Settings > Claude model "
+            "or [weekly_ai] model in config.toml. The report was made without the AI part."))
     except anthropic.AuthenticationError:
         return AiResult(False, error="Claude API key was refused (check it in Settings)", model=model)
     except anthropic.APITimeoutError:
@@ -200,7 +209,7 @@ def summarize(data: dict, *, model: str = DEFAULT_MODEL, key: str | None = None,
     tin = int(getattr(usage, "input_tokens", 0) or 0) + int(getattr(usage, "cache_read_input_tokens", 0) or 0) \
         + int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
     tout = int(getattr(usage, "output_tokens", 0) or 0)
-    res = AiResult(False, model=used, input_tokens=tin, output_tokens=tout, cost_usd=cost_of(used, tin, tout),
+    res = AiResult(False, model=used, input_tokens=tin, output_tokens=tout, cost_usd=cost_of(used, tin, tout, prices),
                    raw_stop=str(getattr(resp, "stop_reason", "")))
     if res.raw_stop == "refusal":
         res.error = "Claude declined the request (refusal)"

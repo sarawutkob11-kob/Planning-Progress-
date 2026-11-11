@@ -51,10 +51,11 @@ def install_schedule(repo, actor: Actor, config_path, at: str, project_id: str |
 
 def save_ai_settings(repo, actor: Actor, *, model: str, api_key: str | None = None,
                      clear_key: bool = False) -> None:
-    """Part 6: Claude model (DB setting) + API key (Windows Credential Manager only, never the DB/log)."""
+    """Part 6: Claude model (DB setting; blank = use config [weekly_ai] model) + API key (Windows Credential
+    Manager only, never the DB/log)."""
     from . import weekly_ai
     require(repo, actor, SETTINGS)
-    model = (model or "").strip() or weekly_ai.DEFAULT_MODEL
+    model = (model or "").strip()
     if api_key and api_key.strip():
         weekly_ai.KEYS.set(api_key.strip())
     elif clear_key:
@@ -63,6 +64,6 @@ def save_ai_settings(repo, actor: Actor, *, model: str, api_key: str | None = No
         repo.set_setting(weekly_ai.S_MODEL, model)
         repo.append_audit({"ts": now_iso(), "editor": actor.editor, "channel": "app", "sheet": "Settings",
                            "item_id": None, "field": "ai_settings", "old_value": "",
-                           "new_value": f"model={model}" + ("; API key updated" if api_key and api_key.strip()
+                           "new_value": f"model={model or '(config default)'}" + ("; API key updated" if api_key and api_key.strip()
                                                            else "; API key removed" if clear_key else ""),
                            "reason": "Weekly report AI settings changed"})

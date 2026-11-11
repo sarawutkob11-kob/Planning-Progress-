@@ -171,8 +171,8 @@ def test_summarize_request_shape_cost_and_number_rejection():
     assert "thinking" not in kw and "temperature" not in kw
     assert r.cost_usd == pytest.approx(8000 * 4 / 1e6 + 2000 * 20 / 1e6)
     client, calls = _fake_client(good)
-    weekly_ai.summarize(data, model="claude-haiku-5-5", key=KEY, client=client)
-    assert "fallbacks" not in calls[0]                                        # Haiku: no server-side fallback
+    weekly_ai.summarize(data, model="claude-haiku-5-5", key=KEY, client=client, server_fallback=False)
+    assert "fallbacks" not in calls[0] and "betas" not in calls[0]           # [weekly_ai] server_fallback = false
     client, _ = _fake_client(json.dumps({"summary_th": "ผ่าน 99%", "summary_en": "", "risks": [], "follow_ups": []}))
     r = weekly_ai.summarize(data, key=KEY, client=client)
     assert not r.ok and "99" in r.error and r.cost_usd is not None           # rejected, still costed
@@ -298,3 +298,84 @@ def test_manual_preview_send_cancel_and_qa_cannot(wcfg, data):
     assert [h["status"] for h in hist] == ["preview", "cancelled", "dry_run"]
     assert hist[-1]["created_by"] == "Pim Pmo <pmo@example.test>" and hist[-1]["cost_usd"] == pytest.approx(0.066)
     assert any(e["field"] == "denied" and e["new_value"] == "weekly" for e in repo.audit_entries())
+
+
+# --------------------------------------------------------------------------- Hardening C: model from config
+
+def _api_error(cls, status, msg="error"):
+    exc = cls.__new__(cls)                    # no HTTP response needed: only the type + fields are used
+    Exception.__init__(exc, msg)
+    exc.status_code, exc.message, exc.body = status, msg, None
+    return exc
+
+
+def test_no_hardcoded_model_list_left():
+    assert not hasattr(weekly_ai, "FALLBACK_MODELS") and not hasattr(weekly_ai, "PRICES")
+    from uat_tracker.config import DEFAULT_AI_MODEL
+    assert weekly_ai.DEFAULT_MODEL == DEFAULT_AI_MODEL == "claude-opus-5-5"
+
+
+def test_model_from_settings_then_config_then_default(wcfg, data, tmp_path):
+    import dataclasses
+    from uat_tracker.config import WeeklyAiConfig, load_config
+    repo = data
+    assert weekly_ai.model_of(repo) == "claude-opus-5-5"
+    cfg = dataclasses.replace(wcfg, weekly_ai=WeeklyAiConfig(model="claude-sonnet-5-5"))
+    assert weekly_ai.model_of(repo, cfg) == "claude-sonnet-5-5"               # config
+    save_ai_settings(repo, PMO_ACTOR, model="claude-haiku-5-5")
+    assert weekly_ai.model_of(repo, cfg) == "claude-haiku-5-5"                # Settings wins
+    save_ai_settings(repo, PMO_ACTOR, model="  ")
+    assert weekly_ai.model_of(repo, cfg) == "claude-sonnet-5-5"               # blank: back to config
+    p = tmp_path / "c.toml"
+    p.write_text('[source]\nexcel_path = "x.xlsx"\n[weekly_ai]\nmodel = "claude-sonnet-5-5"\n'
+                 'server_fallback = false\n[weekly_ai.prices]\n"claude-sonnet-5-5" = [2, 10]\n', encoding="utf-8")
+    w = load_config(p).weekly_ai
+    assert w.model == "claude-sonnet-5-5" and w.server_fallback is False
+    assert w.prices["claude-sonnet-5-5"] == (2.0, 10.0) and "claude-opus-5-5" in w.prices
+    p.write_text('[source]\nexcel_path = "x.xlsx"\n', encoding="utf-8")
+    assert load_config(p).weekly_ai == WeeklyAiConfig()
+
+
+def test_generate_uses_config_model_fallback_switch_and_prices(wcfg, data):
+    import dataclasses
+    from uat_tracker.config import WeeklyAiConfig
+    good = json.dumps({"summary_th": "", "summary_en": "", "risks": [], "follow_ups": []})
+    client, calls = _fake_client(good, model="claude-sonnet-5-5")
+    cfg = dataclasses.replace(wcfg, weekly_ai=WeeklyAiConfig(model="claude-sonnet-5-5", server_fallback=False,
+                                                             prices={"claude-sonnet-5-5": (2.0, 10.0)}))
+    real = W._summarize(cfg)
+    g = W.generate(cfg, data, actor=PMO_ACTOR, as_of=MON,
+                   ai_func=lambda d, model: real(d, model=model, key=KEY, client=client))
+    assert calls[0]["model"] == "claude-sonnet-5-5" and "fallbacks" not in calls[0]
+    r = data.get_weekly(g.report_id)
+    assert r["ai_used"] == 1 and r["cost_usd"] == pytest.approx(8000 * 2 / 1e6 + 2000 * 10 / 1e6)
+
+
+def test_unknown_or_retired_model_clear_error_and_report_without_ai(wcfg, data):
+    import anthropic
+    client, _ = _fake_client("", raise_exc=_api_error(anthropic.NotFoundError, 404, "model: claude-old-1"))
+    r = weekly_ai.summarize({"x": 1}, model="claude-old-1", key=KEY, client=client)
+    assert not r.ok and "'claude-old-1' was not found or is retired" in r.error and "Settings" in r.error
+    g = W.generate(wcfg, data, actor=PMO_ACTOR, as_of=MON,
+                   ai_func=lambda d, model: weekly_ai.summarize(d, model="claude-old-1", key=KEY, client=client))
+    row = data.get_weekly(g.report_id)
+    assert row["ai_used"] == 0 and "not found or is retired" in row["ai_error"] and row["html"]
+
+
+def test_fallback_rejected_by_model_retries_once_without_it_same_data():
+    import anthropic
+    good = json.dumps({"summary_th": "", "summary_en": "", "risks": [], "follow_ups": []})
+    ok_client, _ = _fake_client(good, model="claude-x")
+    calls = []
+
+    def create(**kw):
+        calls.append(kw)
+        if "fallbacks" in kw:
+            raise _api_error(anthropic.BadRequestError, 400, "fallbacks not supported for this model")
+        return ok_client.beta.messages.create(**kw)
+    client = SimpleNamespace(beta=SimpleNamespace(messages=SimpleNamespace(create=create)))
+    r = weekly_ai.summarize({"overall": {"executed": 1}}, model="claude-x", key=KEY, client=client)
+    assert r.ok and len(calls) == 2 and "fallbacks" in calls[0] and "fallbacks" not in calls[1]
+    strip = lambda kw: {k: v for k, v in kw.items() if k not in ("fallbacks", "betas")}
+    assert strip(calls[0]) == strip(calls[1])                                # same data sent both times
+    assert r.cost_usd is None                                                 # no price for claude-x: "-"

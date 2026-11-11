@@ -43,6 +43,19 @@ class SyncConfig:
     backup_dir: Path | None = None   # default <data_dir>/backups
 
 
+# The one documented default Claude model (weekly report). Override with [weekly_ai] model in config.toml,
+# or per installation in Settings > Claude model.
+DEFAULT_AI_MODEL = "claude-opus-5-5"
+DEFAULT_AI_PRICES = {DEFAULT_AI_MODEL: (4.0, 20.0)}     # USD per 1M tokens (input, output)
+
+
+@dataclass(frozen=True)
+class WeeklyAiConfig:
+    model: str = DEFAULT_AI_MODEL        # used when Settings > Claude model is blank
+    server_fallback: bool = True         # ask the API to fall back to another model if this one is overloaded
+    prices: dict = field(default_factory=lambda: dict(DEFAULT_AI_PRICES))   # model -> (input, output) USD / 1M
+
+
 @dataclass(frozen=True)
 class Config:
     excel_path: Path
@@ -61,6 +74,7 @@ class Config:
     project_id: str | None = None
     project_name: str = ""
     enable_clear_project: bool = False   # [features] enable_clear_project - temporary "Clear project data" (off by default)
+    weekly_ai: WeeklyAiConfig = field(default_factory=WeeklyAiConfig)
 
     @property
     def db_path(self) -> Path:
@@ -147,6 +161,21 @@ def _load_sync(raw: dict) -> SyncConfig:
     )
 
 
+def _load_weekly_ai(raw: dict, path: Path) -> WeeklyAiConfig:
+    w = raw.get("weekly_ai", {})
+    d = WeeklyAiConfig()
+    model = str(w.get("model", d.model)).strip() or d.model
+    fb = w.get("server_fallback", d.server_fallback)
+    if not isinstance(fb, bool):
+        raise ValueError(f"{path}: [weekly_ai] server_fallback must be true or false")
+    prices = dict(d.prices)
+    for name, v in (w.get("prices") or {}).items():
+        if not (isinstance(v, (list, tuple)) and len(v) == 2):
+            raise ValueError(f'{path}: [weekly_ai.prices] "{name}" must be [input, output] USD per 1M tokens')
+        prices[str(name)] = (float(v[0]), float(v[1]))
+    return WeeklyAiConfig(model=model, server_fallback=fb, prices=prices)
+
+
 def load_config(path: str | Path | None = None) -> Config:
     path = Path(path) if path else Path.cwd() / DEFAULT_CONFIG_NAME
     if not path.exists():
@@ -170,6 +199,7 @@ def load_config(path: str | Path | None = None) -> Config:
         alerts=_load_alerts(raw, path),
         sync=_load_sync(raw),
         enable_clear_project=bool(raw.get("features", {}).get("enable_clear_project", False)),
+        weekly_ai=_load_weekly_ai(raw, path),
     )
     if cfg.window_start > cfg.window_end:
         raise ValueError(f"{path}: date_window_start is after date_window_end")

@@ -48,6 +48,18 @@ retry_minutes = [1, 2, 5, 10, 15, 30]   # file locked: retry at these offsets, t
 # [headers."Test Progress"]
 # report_by_email = ["Report By Email", "Reporter Email"]
 
+[weekly_ai]
+# Claude model for the weekly report summary. Settings > Claude model (if filled in) wins over this.
+# An unknown or retired model name: the report is still made, without the AI part, and says why.
+model = "claude-opus-5-5"
+# Let the API switch to another model when this one is overloaded. Turned off automatically for one call
+# if the model does not support it.
+server_fallback = true
+
+[weekly_ai.prices]
+# USD per 1M tokens [input, output], only used to show the cost of each report. Unknown model: cost "-".
+"claude-opus-5-5" = [4.0, 20.0]
+
 [features]
 # TEMPORARY "Clear project data" button (Settings > Danger zone). Off by default; set to true only for testing.
 # With dry_run = false (live mode) the app shows a red warning in Settings while this is on.

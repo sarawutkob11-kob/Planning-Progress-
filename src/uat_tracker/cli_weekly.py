@@ -29,7 +29,7 @@ def add_parsers(sub) -> None:
     k = sub.add_parser("ai-key", help="Claude API key for the weekly report (Windows Credential Manager)")
     ks = k.add_subparsers(dest="kcmd", required=True)
     x = ks.add_parser("set", help="type the key (hidden)")
-    x.add_argument("--model", help=f"also set the model (default {weekly_ai.DEFAULT_MODEL})")
+    x.add_argument("--model", help="also set the model (default: [weekly_ai] model in config.toml)")
     ks.add_parser("clear")
     ks.add_parser("status")
 
@@ -69,7 +69,7 @@ def handle(cfg, repo, args) -> int | None:
 
     if args.cmd == "ai-key":
         if args.kcmd == "status":
-            print(f"Model: {weekly_ai.model_of(repo)}  |  API key saved: {'yes' if weekly_ai.KEYS.get() else 'no'}")
+            print(f"Model: {weekly_ai.model_of(repo, cfg)}  |  API key saved: {'yes' if weekly_ai.KEYS.get() else 'no'}")
             return 0
         try:
             if args.kcmd == "set":
@@ -77,10 +77,10 @@ def handle(cfg, repo, args) -> int | None:
                 if not key:
                     print("Nothing typed: key not changed")
                     return 2
-                save_ai_settings(repo, args.actor, model=args.model or weekly_ai.model_of(repo), api_key=key)
+                save_ai_settings(repo, args.actor, model=args.model or (repo.get_setting(weekly_ai.S_MODEL) or ""), api_key=key)
                 print("Saved in Windows Credential Manager")
             else:
-                save_ai_settings(repo, args.actor, model=weekly_ai.model_of(repo), clear_key=True)
+                save_ai_settings(repo, args.actor, model=repo.get_setting(weekly_ai.S_MODEL) or "", clear_key=True)
                 print("Key removed")
         except PermissionDenied as exc:
             print(f"NOT ALLOWED: {exc}")

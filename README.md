@@ -210,7 +210,7 @@ Every Monday at 09:00 the app sends a weekly UAT report. The tracker computes ev
 
 ## Setup
 1. `pip install -e ".[test]"` again (adds the `anthropic` package).
-2. Settings: paste the **Claude API key** (kept only in Windows Credential Manager as `PlanningProgress/anthropic`), and check the **Claude model** (default `claude-opus-5-5`). From a terminal: `.\run.ps1 ai-key set` / `ai-key status` / `ai-key clear`.
+2. Settings: paste the **Claude API key** (kept only in Windows Credential Manager as `PlanningProgress/anthropic`), and check the **Claude model**. Which model is used: Settings > Claude model if filled in, else `[weekly_ai] model` in `config.toml`, else `claude-opus-5-5`. Leave the Settings field blank to follow `config.toml`. An unknown or retired model name does not stop the report: it is made without the AI part and says why. `[weekly_ai] server_fallback` (default `true`) lets the API switch model when one is overloaded; `[weekly_ai.prices]` sets the cost shown per report (model without a price: cost `-`). From a terminal: `.\run.ps1 ai-key set` / `ai-key status` / `ai-key clear`.
 3. Settings: **Apply to Windows scheduler** now installs both tasks: *Planning Progress - Daily Alerts - <project>* and *Planning Progress - Weekly Report - <project>* (09:00 Mon-Fri; the job decides the day).
 4. Add **Report By Email** / **CC Email** to Test Progress, set the **PMO email** and load the **bank holidays** (see Part 2). Until then the report goes to the PMO only.
 

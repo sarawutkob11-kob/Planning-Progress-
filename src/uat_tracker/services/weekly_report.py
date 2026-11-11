@@ -168,6 +168,15 @@ class Generated:
     invalid: list[dict]
 
 
+def _summarize(cfg):
+    """weekly_ai.summarize with this config's [weekly_ai] fallback switch and prices."""
+    import functools
+    w = getattr(cfg, "weekly_ai", None)
+    if w is None:
+        return weekly_ai.summarize
+    return functools.partial(weekly_ai.summarize, server_fallback=w.server_fallback, prices=w.prices)
+
+
 def generate(cfg, repo, *, actor: Actor, as_of: dt.date, trigger: str = "manual", use_ai: bool = True,
              ai_func=None, job_run_id: int | None = None, now: str | None = None) -> Generated:
     """Build the report (status 'preview'). Nothing is sent."""
@@ -176,7 +185,7 @@ def generate(cfg, repo, *, actor: Actor, as_of: dt.date, trigger: str = "manual"
     data = build_data(cfg, repo, as_of)
     to, bad = recipients(repo, flag=True, now=now)
     ai = weekly_ai.AiResult(False, error="AI turned off for this run") if not use_ai else \
-        (ai_func or weekly_ai.summarize)(data, model=weekly_ai.model_of(repo))
+        (ai_func or _summarize(cfg))(data, model=weekly_ai.model_of(repo, cfg))
     notes = []
     if not to:
         notes.append("ไม่มีผู้รับใน Report By Email / CC Email: ส่งให้ PMO เท่านั้น · "

@@ -7,18 +7,22 @@ running the job with --project <id> at that project's own send time (weekly: 09:
 
 from __future__ import annotations
 
+import logging
 import re
 import subprocess
 import sys
 from pathlib import Path
 
+log = logging.getLogger(__name__)
+
 PREFIX = "Planning Progress"
 DAILY = "Daily Alerts"
 WEEKLY = "Weekly Report"
 WEEKLY_TIME = "09:00"
-# Names used before the rename (removed by the migration).
+# Names used before the rename. Removed when a project's tasks are installed (Hardening E).
 LEGACY_TASKS = ("UAT Tracker - Daily Alerts", "UAT Tracker - Weekly Report")
-# Single-project names (CLI without --project, tests).
+# Single-project names (CLI without --project, tests). Before multi-project they ran without --project;
+# once a project's own tasks are installed they are removed too.
 TASK_NAME = f"{PREFIX} - {DAILY}"
 WEEKLY_TASK_NAME = f"{PREFIX} - {WEEKLY}"
 
@@ -96,6 +100,29 @@ def remove_weekly(project_name: str | None = None) -> subprocess.CompletedProces
 
 def remove_named(name: str) -> subprocess.CompletedProcess:
     return subprocess.run(["schtasks", "/Delete", "/F", "/TN", name], capture_output=True, text=True)
+
+
+def old_task_names(project_name: str | None) -> tuple[str, ...]:
+    """Tasks that the new per-project tasks replace."""
+    return LEGACY_TASKS + ((TASK_NAME, WEEKLY_TASK_NAME) if project_name else ())
+
+
+def exists(name: str) -> bool:
+    return subprocess.run(["schtasks", "/Query", "/TN", name], capture_output=True, text=True).returncode == 0
+
+
+def remove_old_tasks(project_name: str | None) -> list[str]:
+    """After the new tasks were created: delete the old-named ones that still exist. Returns the names removed."""
+    removed = []
+    for name in old_task_names(project_name):
+        if exists(name):
+            r = remove_named(name)
+            if r.returncode == 0:
+                removed.append(name)
+                log.info("Removed old scheduled task %r", name)
+            else:
+                log.warning("Could not remove old scheduled task %r: %s", name, (r.stderr or r.stdout).strip())
+    return removed
 
 
 def show(project_name: str | None = None) -> subprocess.CompletedProcess:

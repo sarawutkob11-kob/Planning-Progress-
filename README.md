@@ -6,10 +6,17 @@ It only reads the workbook. It copies the workbook to `snapshots/` first and nev
 
 ## Setup (once)
 
+**Python 3.14** (tested with 3.14.6 on Windows 11). `pyproject.toml` allows 3.11+, but only 3.14.6 is tested.
+
 ```powershell
 python -m venv $env:USERPROFILE\.venvs\uat-tracker          # outside OneDrive on purpose
-& $env:USERPROFILE\.venvs\uat-tracker\Scripts\python.exe -m pip install -e ".[test]"
+$py = "$env:USERPROFILE\.venvs\uat-tracker\Scripts\python.exe"
+& $py -m pip install -r requirements.lock                   # the exact, tested versions
+& $py -m pip install -e . --no-deps                         # the app itself
 ```
+`requirements.lock` holds the exact versions of the working environment (tests included). `pyproject.toml` only
+sets ranges (up to the next major version). After upgrading a package and running the tests, regenerate it:
+`& $py -m pip freeze --exclude-editable > requirements.lock` (keep the 3 comment lines at the top).
 
 Then edit `config.toml` (copied from `config.example.toml`): workbook path, data folder and date window.
 
@@ -62,7 +69,7 @@ Only **Test Progress** drives automatic emails. The job re-imports Excel before 
 4. Bank holidays. Without data for the current year the job sends nothing and warns the PMO. Either:
    - register a key at <https://portal.api.bot.or.th/> and set `bot_api_key` (check `bot_url` there), then `holidays fetch`; or
    - `holidays import holidays.csv` (`date,name` per line, date `YYYY-MM-DD` or `DD-Mon-YYYY`), or `holidays add 2026-12-07 "Name"`.
-5. Schedule it: `scheduler install` (creates the task *Planning Progress - Daily Alerts - <project>*: 08:30 Mon–Fri, only when you are logged on, missed runs are not caught up). `scheduler show` / `scheduler remove`.
+5. Schedule it: `scheduler install` (creates the task *Planning Progress - Daily Alerts - <project>*: 08:30 Mon–Fri, only when you are logged on, missed runs are not caught up). `scheduler show` / `scheduler remove`. Once the new tasks are created, tasks with the old names (*UAT Tracker - Daily Alerts / Weekly Report* and the single-project *Planning Progress - Daily Alerts / Weekly Report*) are deleted.
 
 ## Commands
 
@@ -294,17 +301,18 @@ PMO email, Outlook account, language.
     warning in the log each time the project is opened.
 
 ### Removing the Clear project feature
-Everything is isolated; delete these (line numbers as of Hardening phase 1, 11-Nov-2026):
+Everything is isolated; delete these (line numbers as of the end of Hardening phase 1, 11-Nov-2026; search for
+the names if lines moved):
 
 | File | What to delete |
 |---|---|
 | `src/uat_tracker/services/clear_project.py` | the whole file |
-| `src/uat_tracker/services/projects.py` | lines 107-108 (`warn_if_live` import + call in `open_project`) |
-| `src/uat_tracker/ui/screens/settings.py` | `clear_project` in the import on line 14; lines 53-54 (live warning); lines 161-162 (danger zone); methods `_live_warning` (238-242) and `_danger_zone` (244-end of method) |
-| `src/uat_tracker/ui/projects.py` | `DANGER_QSS` (line 18) and class `ClearProjectDialog` (line 145 to the next class) |
-| `src/uat_tracker/cli_project.py` | the `restore-clear` sub-command: parser line 33, branch lines 108-112, `ClearError` in lines 115-116; and the word in the help/docstrings (lines 1, 15) and `cli.py` line 13 |
-| `src/uat_tracker/ui/i18n.py` | all `danger.*` keys (lines 471-496) |
-| `src/uat_tracker/config.py` | field `enable_clear_project` (line 63) and its loader line 172 |
+| `src/uat_tracker/services/projects.py` | lines 112-113 (`warn_if_live` import + call in `open_project`) |
+| `src/uat_tracker/ui/screens/settings.py` | `clear_project` in the import on line 15; lines 56-57 (live warning); lines 164-165 (danger zone); methods `_live_warning` (line 242) and `_danger_zone` (line 248, up to `_browse`) |
+| `src/uat_tracker/ui/projects.py` | `DANGER_QSS` (line 20) and class `ClearProjectDialog` (line 163, up to `class NoProjectWindow`) |
+| `src/uat_tracker/cli_project.py` | the `restore-clear` sub-command: parser line 36, branch from line 111, `ClearError` in lines 119-120; the word in the help/docstrings (lines 1, 18) and `cli.py` line 13 |
+| `src/uat_tracker/ui/i18n.py` | all `danger.*` keys (lines 476-501) and `work.clearing` |
+| `src/uat_tracker/config.py` | field `enable_clear_project` (line 76) and its loader line 201 |
 | `config.example.toml` | the `[features]` section |
 | `tests/test_projects.py` | `test_clear_project_*`, `test_import_from_excel_after_clear_unpauses`, imports on lines 23-24 |
 | `tests/test_ui.py` | `test_settings_red_warning_only_when_clear_feature_on_in_live_mode` |
@@ -312,6 +320,9 @@ Everything is isolated; delete these (line numbers as of Hardening phase 1, 11-N
 The "reading Excel is paused" state (`S_PAUSED`, the `proj.paused` banner) can stay: it only switches on after a clear.
 
 ## Known limits
+- **Who is using the app is not verified.** The name / email in the profile form is a claimed identity: anyone
+  on the PC can "Switch user" and act with that person's role. Roles and the audit log rely on people using
+  their own name. Real login (Windows / AD identity) is planned for phase 2.
 - RAMC UAT's Test Progress has a *Grand Total* row: a new application is inserted above it, but the existing
   `SUM(D2:D52)` formulas do not grow to include the new row (Excel does not extend a range for a row inserted
   right below it). Fix the totals once in Excel if you add applications from the app.

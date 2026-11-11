@@ -278,3 +278,48 @@ def test_sync_busy_shows_friendly_message(qapp, cfg, repo, monkeypatch):
         wait_for_workers()
     assert shown == ["Sync running, try again in a moment."]
     assert isinstance(SyncBusy("x"), Exception)
+
+
+# --------------------------------------------------------------------------- E: old Task Scheduler names
+
+def _fake_schtasks(monkeypatch, existing):
+    from types import SimpleNamespace
+    from uat_tracker.services import scheduler
+    calls = []
+
+    def run(args, **kw):
+        calls.append(args)
+        if args[1] == "/Query":
+            return SimpleNamespace(returncode=0 if args[3] in existing else 1, stdout="", stderr="")
+        if args[1] == "/Delete":
+            existing.discard(args[4])
+        return SimpleNamespace(returncode=0, stdout="SUCCESS", stderr="")
+    monkeypatch.setattr(scheduler.subprocess, "run", run)
+    return calls
+
+
+def test_install_creates_new_tasks_then_removes_old_named_ones(cfg, repo, monkeypatch):
+    from uat_tracker.services.settings import install_schedule
+    existing = {"UAT Tracker - Daily Alerts", "UAT Tracker - Weekly Report",
+                "Planning Progress - Daily Alerts", "Planning Progress - Weekly Report", "Some other task"}
+    calls = _fake_schtasks(monkeypatch, existing)
+    daily, weekly = install_schedule(repo, PMO_ACTOR, Path("config.toml"), "08:30", "p002", "Test")
+    creates = [c[c.index("/TN") + 1] for c in calls if c[1] == "/Create"]
+    deletes = [c[4] for c in calls if c[1] == "/Delete"]
+    assert creates == ["Planning Progress - Daily Alerts - Test", "Planning Progress - Weekly Report - Test"]
+    assert calls.index(next(c for c in calls if c[1] == "/Delete")) > \
+        calls.index(next(c for c in calls if c[1] == "/Create" and "Weekly" in c[c.index("/TN") + 1]))   # new first
+    assert set(deletes) == {"UAT Tracker - Daily Alerts", "UAT Tracker - Weekly Report",
+                            "Planning Progress - Daily Alerts", "Planning Progress - Weekly Report"}
+    assert existing == {"Some other task"} and "Removed old task(s)" in weekly.stdout
+
+
+def test_old_tasks_kept_when_new_ones_could_not_be_created(cfg, repo, monkeypatch):
+    from types import SimpleNamespace
+    from uat_tracker.services import scheduler
+    from uat_tracker.services.settings import install_schedule
+    existing = {"UAT Tracker - Daily Alerts"}
+    _fake_schtasks(monkeypatch, existing)
+    monkeypatch.setattr(scheduler, "install", lambda *a, **k: SimpleNamespace(returncode=1, stdout="", stderr="no"))
+    install_schedule(repo, PMO_ACTOR, Path("config.toml"), "08:30", "p002", "Test")
+    assert existing == {"UAT Tracker - Daily Alerts"}

@@ -45,8 +45,13 @@ def install_schedule(repo, actor: Actor, config_path, at: str, project_id: str |
     """Daily alerts task + (Part 6) weekly report task, for one project. Returns the two schtasks results."""
     from . import scheduler
     require(repo, actor, SETTINGS)
-    return (scheduler.install(config_path, at, project_id, project_name),
-            scheduler.install_weekly(config_path, project_id=project_id, project_name=project_name))
+    daily = scheduler.install(config_path, at, project_id, project_name)
+    weekly = scheduler.install_weekly(config_path, project_id=project_id, project_name=project_name)
+    if daily.returncode == 0 and weekly.returncode == 0:         # new names in place: drop the old-named tasks
+        removed = scheduler.remove_old_tasks(project_name)
+        if removed:
+            weekly.stdout = (weekly.stdout or "") + "\nRemoved old task(s): " + ", ".join(removed)
+    return daily, weekly
 
 
 def save_ai_settings(repo, actor: Actor, *, model: str, api_key: str | None = None,

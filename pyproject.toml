@@ -6,11 +6,18 @@ build-backend = "setuptools.build_meta"
 name = "uat-tracker"   # internal package name kept (approved); the app is "Planning Progress"
 version = "0.5.0"
 description = "Planning Progress - UAT planning, test progress and defects tracker (multi-project)"
-requires-python = ">=3.11"
-dependencies = ["openpyxl>=3.1", "pywin32>=306; sys_platform == 'win32'", "watchdog>=4", "PySide6>=6.7", "anthropic>=1.0"]
+requires-python = ">=3.11"   # tested on 3.14.6 only (README)
+# Upper bound = next major version (Hardening E). Exact tested versions: requirements.lock.
+dependencies = [
+    "openpyxl>=3.1,<4",
+    "pywin32>=306,<400; sys_platform == 'win32'",
+    "watchdog>=4,<8",
+    "PySide6>=6.7,<7",
+    "anthropic>=1.0,<3",
+]
 
 [project.optional-dependencies]
-test = ["pytest>=8"]
+test = ["pytest>=8,<10"]
 
 [project.scripts]
 uat-tracker = "uat_tracker.cli:main"

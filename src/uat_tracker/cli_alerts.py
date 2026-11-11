@@ -16,6 +16,7 @@ from .services.auth import SETTINGS, PermissionDenied, require
 from .services.daily_job import JOB, run_daily
 from .services.holidays import parse_user_date, read_csv, refresh_year, store_holidays
 from .services.reminders import ReminderError, send_reminder
+from .services.settings import install_schedule
 from .services.sync import SyncService
 from .services.traffic_light import compute
 
@@ -165,8 +166,7 @@ def handle(cfg, repo, args, config_path: Path) -> int | None:
             return 0
         if args.action in ("install", "remove"):
             require(repo, args.actor, SETTINGS)
-        procs = {"install": lambda: [scheduler.install(config_path, args.at, pid, pname),
-                                     scheduler.install_weekly(config_path, project_id=pid, project_name=pname)],
+        procs = {"install": lambda: install_schedule(repo, args.actor, config_path, args.at, pid, pname),
                  "remove": lambda: [scheduler.remove(pname), scheduler.remove_weekly(pname)],
                  "show": lambda: [scheduler.show(pname)]}[args.action]()      # Part 6: the weekly task goes with it
         rc = 0

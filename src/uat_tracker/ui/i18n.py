@@ -476,17 +476,21 @@ TEXT: dict[str, tuple[str, str]] = {      # key: (English, Thai)
     "danger.cleared": ("Will be cleared", "สิ่งที่จะถูกล้าง"),
     "danger.kept": ("Will be kept", "สิ่งที่จะเก็บไว้"),
     "danger.cleared_list": ("Tasks, applications, defects, reschedule history, Traffic Light history, sync / "
-                            "conflicts / review queue, audit log, alert and email log, weekly reports, cached "
+                            "conflicts / review queue, alert and email log, weekly reports, cached "
                             "attachments and Excel copies - for this project only.",
                             "งาน, application, defect, ประวัติเลื่อนวัน, ประวัติ Traffic Light, sync / conflict / "
-                            "คิวตรวจ, audit log, ประวัติแจ้งเตือนและอีเมล, รายงานประจำสัปดาห์, ไฟล์แนบและสำเนา Excel "
+                            "คิวตรวจ, ประวัติแจ้งเตือนและอีเมล, รายงานประจำสัปดาห์, ไฟล์แนบและสำเนา Excel "
                             "ในเครื่อง - เฉพาะโปรเจกต์นี้"),
-    "danger.kept_list": ("The project and its Excel file link, users and roles, settings (X%, dry-run, send "
-                         "time), workbook backups, the Excel file itself, shared settings, other projects. "
-                         "A backup zip is made first.",
-                         "ตัวโปรเจกต์และลิงก์ไฟล์ Excel, ผู้ใช้และสิทธิ์, การตั้งค่า (X%, dry-run, เวลาส่ง), "
-                         "backup ของไฟล์ Excel, ตัวไฟล์ Excel, ค่าที่ใช้ร่วมกัน, โปรเจกต์อื่น "
-                         "ระบบจะทำไฟล์ zip สำรองก่อนล้าง"),
+    "danger.kept_list": ("The audit log (an entry 'project data cleared' is added), the project and its Excel "
+                         "file link, users and roles, settings (X%, dry-run, send time), workbook backups, the "
+                         "Excel file itself, shared settings, other projects. A backup zip is made first.",
+                         "Audit log (เพิ่มรายการ 'ล้างข้อมูลโปรเจกต์'), ตัวโปรเจกต์และลิงก์ไฟล์ Excel, ผู้ใช้และสิทธิ์, "
+                         "การตั้งค่า (X%, dry-run, เวลาส่ง), backup ของไฟล์ Excel, ตัวไฟล์ Excel, ค่าที่ใช้ร่วมกัน, "
+                         "โปรเจกต์อื่น ระบบจะทำไฟล์ zip สำรองก่อนล้าง"),
+    "danger.live_warning": ("WARNING: 'Clear project data' is turned on while this project is LIVE (dry-run off, "
+                            "emails go to real people). Set [features] enable_clear_project = false in config.toml.",
+                            "คำเตือน: เปิดฟีเจอร์ 'ล้างข้อมูลโปรเจกต์' อยู่ ขณะที่โปรเจกต์นี้ใช้งานจริง (ปิด dry-run "
+                            "อีเมลส่งถึงผู้รับจริง) ให้ตั้ง [features] enable_clear_project = false ใน config.toml"),
     "danger.type": ("Type the project name to confirm", "พิมพ์ชื่อโปรเจกต์เพื่อยืนยัน"),
     "danger.go": ("Clear data", "ล้างข้อมูล"),
     "danger.done": ("Cleared. Backup: {p}", "ล้างข้อมูลแล้ว ไฟล์สำรอง: {p}"),

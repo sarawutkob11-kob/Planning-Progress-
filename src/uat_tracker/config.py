@@ -60,7 +60,7 @@ class Config:
     shared_db: Path | None = None        # app.db, attached to every project DB (holidays + shared settings)
     project_id: str | None = None
     project_name: str = ""
-    enable_clear_project: bool = True    # [features] enable_clear_project - temporary "Clear project data"
+    enable_clear_project: bool = False   # [features] enable_clear_project - temporary "Clear project data" (off by default)
 
     @property
     def db_path(self) -> Path:
@@ -169,7 +169,7 @@ def load_config(path: str | Path | None = None) -> Config:
         header_overrides=raw.get("headers", {}),
         alerts=_load_alerts(raw, path),
         sync=_load_sync(raw),
-        enable_clear_project=bool(raw.get("features", {}).get("enable_clear_project", True)),
+        enable_clear_project=bool(raw.get("features", {}).get("enable_clear_project", False)),
     )
     if cfg.window_start > cfg.window_end:
         raise ValueError(f"{path}: date_window_start is after date_window_end")

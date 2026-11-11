@@ -103,7 +103,10 @@ def open_project(base: Config, project: dict):
     cfg = project_config(base, project)
     repo = open_repository(cfg)
     set_project(project["name"])                      # email footer / PMO alert subject name the project
-    return apply_overrides(cfg, repo), repo
+    cfg = apply_overrides(cfg, repo)
+    from .clear_project import warn_if_live            # TEMPORARY clear-project feature (see README)
+    warn_if_live(cfg)
+    return cfg, repo
 
 
 def open_app_db(base: Config) -> AppDb:

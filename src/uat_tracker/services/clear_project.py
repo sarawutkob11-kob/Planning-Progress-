@@ -1,41 +1,51 @@
 """TEMPORARY "Clear project data" (multi-project add-on, section I). For testing only.
 
-Everything for this feature is in this module + one button in Settings (Danger zone). To remove it later:
-delete this file, the `_danger_zone` part of ui/screens/settings.py and the `project restore-clear` command,
-or just set [features] enable_clear_project = false in config.toml.
+Off by default ([features] enable_clear_project = false). The full list of what to delete to remove this
+feature is in README ("Removing the Clear project feature").
 
-Approved 10-Nov-2026:
+Approved 10-Nov-2026, changed by Hardening phase 1 (11-Nov-2026):
 - Admin + PMO of the selected project only. The user types the project name to enable the button.
 - Clears the SELECTED project's app-side data: tasks, applications, defects, reschedule history, Traffic Light
-  history, sync / conflict / review queue / flags, audit log, alert + email log, weekly report history,
+  history, sync / conflict / review queue / flags, alert + email log, weekly report history,
   job runs, import runs, Excel snapshots, cached attachments (files too).
-- Keeps: the project (name, file link), users + roles + names in Excel, per-project settings (X%, dry-run,
+- Keeps: the AUDIT LOG (never deleted; one entry "project data cleared by <actor>, backup <path>" is added),
+  the project (name, file link), users + roles + names in Excel, per-project settings (X%, dry-run,
   send time, ...), reminder contacts, workbook backups, the Excel file itself (never opened), shared settings,
   other projects.
 - Before: zip of the project DB + attachment folder (timestamped), path shown. After: reading Excel is paused
-  until "Import from Excel" (approved Q10). Logged in <root>/clear-project.log (the audit log is cleared).
-- Restore: restore_backup(zip) (CLI `project restore-clear <zip>`, approved Q9).
+  until "Import from Excel" (approved Q10). Also logged in <root>/clear-project.log.
+- Restore: restore_backup(zip) (CLI `project restore-clear <zip>`, approved Q9). The restored DB is from before
+  the clear, so an audit entry "project data restored from <zip> ..." is added to it.
+- Live mode (dry_run = false) with the feature on: red warning in Settings + a log warning when a project opens.
 """
 
 from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 import shutil
 import sqlite3
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..domain.models import CHANNEL_APP
 from .auth import ADMIN, PMO, current_role, now_iso
 from .importer import S_PAUSED
+
+log = logging.getLogger(__name__)
 
 ALLOWED_ROLES = (ADMIN, PMO)
 CLEARED_TABLES = ("uat_task", "test_progress", "defect", "date_history", "cell_baseline", "review_queue",
                   "data_flag", "import_run", "job_run", "traffic_light_history", "email_log", "attachment",
-                  "pending_writeback", "conflict", "sync_event", "weekly_report", "audit_log")
-KEPT = ("project name + Excel file link", "users, roles, names in Excel", "settings: Fail X%, dry-run, send time",
-        "reminder contacts", "workbook backups", "the Excel file (not touched)", "shared settings", "other projects")
+                  "pending_writeback", "conflict", "sync_event", "weekly_report")
+KEPT = ("audit log (+ one 'cleared' entry)", "project name + Excel file link", "users, roles, names in Excel",
+        "settings: Fail X%, dry-run, send time", "reminder contacts", "workbook backups",
+        "the Excel file (not touched)", "shared settings", "other projects")
+AUDIT_SHEET = "Project"
+AUDIT_FIELD_CLEAR = "clear_project_data"
+AUDIT_FIELD_RESTORE = "restore_clear_backup"
 CLEARED_SETTING_PREFIXES = ("sync.", "alerts.")      # sync / alert state; settings.* and ui.* stay
 CLEARED_DIRS = ("attachments", "snapshots", "previews")
 LOG_NAME = "clear-project.log"
@@ -53,6 +63,24 @@ class ClearResult:
 
 def enabled(cfg) -> bool:
     return bool(getattr(cfg, "enable_clear_project", False))
+
+
+def live_warning(cfg) -> bool:
+    """Feature on while emails go to real recipients (dry_run = false): show the red warning."""
+    return enabled(cfg) and not cfg.alerts.dry_run
+
+
+def warn_if_live(cfg) -> bool:
+    if live_warning(cfg):
+        log.warning("Clear project data is ON in live mode (dry_run = false) for project %s (%s). "
+                    "Set [features] enable_clear_project = false.", cfg.project_name or "-", cfg.project_id or "-")
+        return True
+    return False
+
+
+def _audit(repo, *, editor: str, field: str, item_id, old="", new="", reason="") -> None:
+    repo.append_audit({"ts": now_iso(), "editor": editor, "channel": CHANNEL_APP, "sheet": AUDIT_SHEET,
+                       "item_id": item_id, "field": field, "old_value": old, "new_value": new, "reason": reason})
 
 
 def allowed(repo, actor) -> bool:
@@ -107,14 +135,14 @@ def clear_project(cfg, repo, actor, *, typed_name: str) -> ClearResult:
     before = counts(repo)
     zpath = _backup(cfg, repo, stamp)
     with repo.transaction():
-        repo.conn.execute("DROP TRIGGER IF EXISTS audit_log_no_delete")      # only for this clear
-        for t in CLEARED_TABLES:
+        for t in CLEARED_TABLES:                         # the audit log is never deleted
             repo.conn.execute(f"DELETE FROM {t}")
-        repo.conn.execute("CREATE TRIGGER audit_log_no_delete BEFORE DELETE ON audit_log "
-                          "BEGIN SELECT RAISE(ABORT, 'audit_log is immutable'); END")
         for prefix in CLEARED_SETTING_PREFIXES:
             repo.conn.execute("DELETE FROM main.settings WHERE key LIKE ?", (prefix + "%",))
         repo.set_setting(S_PAUSED, now_iso())
+        _audit(repo, editor=actor.editor, field=AUDIT_FIELD_CLEAR, item_id=cfg.project_id,
+               old=json.dumps(before, sort_keys=True), new=str(zpath),
+               reason=f"project data cleared by {actor.editor}, backup {zpath}")
     for d in CLEARED_DIRS:
         p = cfg.data_dir / d
         if p.exists():
@@ -150,6 +178,15 @@ def restore_backup(cfg, zip_path: Path, *, editor: str) -> dict:
                 target = cfg.attachment_dir / name[len("attachments/"):]
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(z.read(name))
+    from ..storage.sqlite_repo import SqliteRepository
+    repo = SqliteRepository(cfg.db_path, shared=cfg.shared_db)     # the restored DB: note the restore in it
+    try:
+        with repo.transaction():
+            _audit(repo, editor=editor, field=AUDIT_FIELD_RESTORE, item_id=cfg.project_id, new=str(zip_path),
+                   reason=f"project data restored from {zip_path} by {editor}, "
+                          f"previous clear at {man.get('created_at')}")
+    finally:
+        repo.close()
     _log(cfg, {"ts": now_iso(), "action": "restore_clear_backup", "project_id": cfg.project_id,
                "project_name": cfg.project_name, "user": editor, "backup": str(zip_path)})
     return man

@@ -20,6 +20,7 @@ from uat_tracker.excel.writer import OpenpyxlWorkbook
 from uat_tracker.mail.sender import FakeSender
 from uat_tracker.services import projects, scheduler
 from uat_tracker.services.auth import Actor
+from uat_tracker.services import clear_project as clear_project_mod
 from uat_tracker.services.clear_project import ClearError, clear_project, counts, restore_backup
 from uat_tracker.services.edits import edit_item
 from uat_tracker.services.importer import ImportPaused, S_PAUSED, run_import
@@ -343,9 +344,23 @@ def test_migration_ramc_uat_counts_lights_and_rename(tmp_path, monkeypatch):
 
 # --------------------------------------------------------------------------- I: Clear project data
 
+def test_clear_project_is_off_by_default(base, appdb, two, opened, tmp_path):
+    from uat_tracker.config import load_config
+    ca, ra = opened(two[0])
+    assert ca.enable_clear_project is False and not clear_project_mod.enabled(ca)
+    with pytest.raises(ClearError, match="turned off"):
+        clear_project(ca, ra, ADMIN, typed_name="Alpha")
+    p = tmp_path / "c.toml"
+    p.write_text('[source]\nexcel_path = "x.xlsx"\n', encoding="utf-8")
+    assert load_config(p).enable_clear_project is False
+    example = Path(__file__).resolve().parents[1] / "config.example.toml"
+    assert load_config(example).enable_clear_project is False
+
+
 def test_clear_project_only_that_project_and_restore(base, appdb, two, opened):
     a, b = two
     ca, ra = opened(a)
+    ca = dataclasses.replace(ca, enable_clear_project=True)
     cb, rb = opened(b)
     save_settings(ra, ADMIN, fail_pct=12, dry_run=True, pmo_email=None, email_time="07:00")
     att = ca.attachment_dir / "TP-1"
@@ -356,6 +371,7 @@ def test_clear_project_only_that_project_and_restore(base, appdb, two, opened):
                               "stored_path": str(att / "result.pdf"), "sha256": "x", "size_bytes": 3,
                               "uploaded_by": "t", "uploaded_at": "t"})
     before_a, before_b = counts(ra), counts(rb)
+    audit_before = ra.audit_entries()
     a_hash = sha(a["excel_path"])
     qa = add_test_user(ra, "qa@example.test", "QA")
     with pytest.raises(ClearError, match="Not allowed"):
@@ -373,9 +389,16 @@ def test_clear_project_only_that_project_and_restore(base, appdb, two, opened):
     assert sha(a["excel_path"]) == a_hash                                       # Excel never touched
     assert ra.get_user(PERSON.email) is not None and ra.get_setting("settings.fail_threshold") == "0.12"
     assert not ca.attachment_dir.exists()
-    with pytest.raises(sqlite3.IntegrityError):                                 # immutability is back
+    # audit log kept + one "cleared" entry; still immutable
+    audit_after = ra.audit_entries()
+    assert len(audit_before) > 0 and audit_after[:len(audit_before)] == audit_before
+    assert len(audit_after) == len(audit_before) + 1
+    last = audit_after[-1]
+    assert last["field"] == "clear_project_data" and last["editor"] == ADMIN.editor
+    assert last["reason"] == f"project data cleared by {ADMIN.editor}, backup {res.backup_zip}"
+    assert last["prev_hash"] == audit_before[-1]["hash"]                        # hash chain continues
+    with pytest.raises(sqlite3.IntegrityError):
         with ra.transaction():
-            ra.conn.execute("INSERT INTO audit_log (ts, editor, channel, hash) VALUES ('t','t','t','h')")
             ra.conn.execute("DELETE FROM audit_log")
     log = (base.root_dir / "clear-project.log").read_text(encoding="utf-8").splitlines()
     entry = json.loads(log[-1])
@@ -393,6 +416,9 @@ def test_clear_project_only_that_project_and_restore(base, appdb, two, opened):
     ra2 = SqliteRepository(ca.db_path, shared=ca.shared_db)
     try:
         assert counts(ra2) == before_a
+        restored = ra2.audit_entries()[-1]
+        assert restored["field"] == "restore_clear_backup" and restored["editor"] == "t"
+        assert str(res.backup_zip) in restored["reason"] and "previous clear at" in restored["reason"]
         assert (ca.attachment_dir / "TP-1" / "result.pdf").read_bytes() == b"pdf"
         assert not ra2.get_setting(S_PAUSED)
     finally:
@@ -402,6 +428,7 @@ def test_clear_project_only_that_project_and_restore(base, appdb, two, opened):
 def test_import_from_excel_after_clear_unpauses(base, appdb, two, opened):
     a, _ = two
     ca, ra = opened(a)
+    ca = dataclasses.replace(ca, enable_clear_project=True)
     n = ra.count_items()[TP]["active"]
     clear_project(ca, ra, ADMIN, typed_name="Alpha")
     run_import(ca, ra, editor="t", force=True)
@@ -528,7 +555,7 @@ def test_profile_form_no_project_page_then_new_project(qapp, base, appdb, tmp_pa
     assert "Demo/1" in w.windowTitle() and "Somchai T · Admin" in w.user_lab.text()
     assert w.proj_cb.count() == 1 and w.new_proj_btn.isVisibleTo(w)
     w.navigate("settings")
-    assert "Danger zone" in " ".join(l.text() for l in w.findChildren(__import__("PySide6.QtWidgets",
+    assert "Danger zone" not in " ".join(l.text() for l in w.findChildren(__import__("PySide6.QtWidgets",
                                                                                  fromlist=["QLabel"]).QLabel))
     w.on_closed = None
     ctl._close_current()
@@ -586,3 +613,25 @@ def test_switch_user_logged_and_project_list_follows(qapp, base, appdb, two, mon
         ra.close()
     ctl.win.on_closed = None
     ctl.win.close()
+
+
+def test_clear_project_live_mode_warning(base, appdb, two, opened, caplog):
+    import logging
+    from uat_tracker.config import AlertsConfig
+    ca, ra = opened(two[0])
+    on = dataclasses.replace(ca, enable_clear_project=True)
+    live = dataclasses.replace(on, alerts=AlertsConfig(dry_run=False))
+    assert not clear_project_mod.live_warning(ca)                              # off
+    assert not clear_project_mod.live_warning(on)                              # on, dry-run
+    assert clear_project_mod.live_warning(live)
+    with caplog.at_level(logging.WARNING, logger="uat_tracker.services.clear_project"):
+        assert clear_project_mod.warn_if_live(live)
+        assert not clear_project_mod.warn_if_live(on)
+    assert len(caplog.records) == 1 and "live mode" in caplog.records[0].getMessage()
+    # opening a live project with the feature on logs the warning too
+    save_settings(ra, ADMIN, fail_pct=5, dry_run=False, pmo_email=None, email_time="08:30")
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="uat_tracker.services.clear_project"):
+        _, r2 = projects.open_project(dataclasses.replace(base, enable_clear_project=True), two[0])
+        r2.close()
+    assert any("live mode" in r.getMessage() for r in caplog.records)

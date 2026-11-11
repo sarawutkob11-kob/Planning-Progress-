@@ -50,6 +50,8 @@ class SettingsScreen(Screen):
         save.clicked.connect(self._save)
         head.addWidget(save)
         self.lay.addLayout(head)
+        if clear_project.live_warning(cfg):              # TEMPORARY clear-project feature (see README)
+            self.lay.addWidget(self._live_warning())
 
         app = ctx.app
         self.manager = bool(app) and projects.can_manage(app.base, app.appdb, app.person.email)
@@ -232,6 +234,12 @@ class SettingsScreen(Screen):
         if app.win is not None:
             app.win.retranslate()
         self.ctx.refresh_all()
+
+    def _live_warning(self):
+        lab = label(t("danger.live_warning"), wrap_text=True)
+        lab.setObjectName("liveClearWarning")
+        lab.setStyleSheet("background:#C62828;color:white;font-weight:bold;padding:10px;border-radius:6px;")
+        return lab
 
     def _danger_zone(self):
         from ..projects import DANGER_QSS, ClearProjectDialog

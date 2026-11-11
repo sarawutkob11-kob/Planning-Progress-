@@ -269,8 +269,31 @@ PMO email, Outlook account, language.
   "Shared" (Admin / PMO), Apply to Windows scheduler (one task pair per project, `--project <id>`).
 - **File moved / renamed outside the app**: banner + **Relink** (the new file needs the 3 sheets and >= 80 % of
   the project's App IDs).
-- **Danger zone → Clear project data** (TEMPORARY, Admin / PMO): see `services/clear_project.py`. Turn off with
-  `[features] enable_clear_project = false`. Restore: `.\run.ps1 project restore-clear <project> <zip>`.
+- **Danger zone → Clear project data** (TEMPORARY, Admin / PMO): see `services/clear_project.py`. **Off by
+  default**; turn on for testing with `[features] enable_clear_project = true`. Restore:
+  `.\run.ps1 project restore-clear <project> <zip>`.
+  - The **audit log is never cleared**: one entry "project data cleared by <user>, backup <zip>" is added
+    (and "project data restored from <zip> ..." after a restore).
+  - Feature on + live mode (`dry_run = false` for the open project): red warning at the top of Settings and a
+    warning in the log each time the project is opened.
+
+### Removing the Clear project feature
+Everything is isolated; delete these (line numbers as of Hardening phase 1, 11-Nov-2026):
+
+| File | What to delete |
+|---|---|
+| `src/uat_tracker/services/clear_project.py` | the whole file |
+| `src/uat_tracker/services/projects.py` | lines 107-108 (`warn_if_live` import + call in `open_project`) |
+| `src/uat_tracker/ui/screens/settings.py` | `clear_project` in the import on line 14; lines 53-54 (live warning); lines 161-162 (danger zone); methods `_live_warning` (238-242) and `_danger_zone` (244-end of method) |
+| `src/uat_tracker/ui/projects.py` | `DANGER_QSS` (line 18) and class `ClearProjectDialog` (line 145 to the next class) |
+| `src/uat_tracker/cli_project.py` | the `restore-clear` sub-command: parser line 33, branch lines 108-112, `ClearError` in lines 115-116; and the word in the help/docstrings (lines 1, 15) and `cli.py` line 13 |
+| `src/uat_tracker/ui/i18n.py` | all `danger.*` keys (lines 471-496) |
+| `src/uat_tracker/config.py` | field `enable_clear_project` (line 63) and its loader line 172 |
+| `config.example.toml` | the `[features]` section |
+| `tests/test_projects.py` | `test_clear_project_*`, `test_import_from_excel_after_clear_unpauses`, imports on lines 23-24 |
+| `tests/test_ui.py` | `test_settings_red_warning_only_when_clear_feature_on_in_live_mode` |
+
+The "reading Excel is paused" state (`S_PAUSED`, the `proj.paused` banner) can stay: it only switches on after a clear.
 
 ## Known limits
 - RAMC UAT's Test Progress has a *Grand Total* row: a new application is inserted above it, but the existing

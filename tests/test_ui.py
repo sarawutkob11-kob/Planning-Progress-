@@ -345,3 +345,20 @@ def test_test_progress_columns_not_hidden(win, qapp):
     qapp.processEvents()
     qapp.processEvents()
     assert tb.columnWidth(0) == scr._col_min[0]
+
+
+def test_settings_red_warning_only_when_clear_feature_on_in_live_mode(win):
+    scr = win.screens["settings"]
+
+    def banner():
+        win.navigate("settings")
+        scr.refresh()
+        return [l for l in scr.findChildren(QLabel) if l.objectName() == "liveClearWarning"]
+    assert banner() == []                                                         # default: feature off
+    base = win.ctx.cfg
+    win.ctx.cfg = dataclasses.replace(base, enable_clear_project=True)            # on, but dry-run
+    assert banner() == []
+    win.ctx.cfg = dataclasses.replace(base, enable_clear_project=True,
+                                      alerts=dataclasses.replace(base.alerts, dry_run=False))
+    shown = banner()
+    assert len(shown) == 1 and "enable_clear_project = false" in shown[0].text()

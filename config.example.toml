@@ -49,5 +49,6 @@ retry_minutes = [1, 2, 5, 10, 15, 30]   # file locked: retry at these offsets, t
 # report_by_email = ["Report By Email", "Reporter Email"]
 
 [features]
-# TEMPORARY "Clear project data" button (Settings > Danger zone). Set to false to hide it.
-enable_clear_project = true
+# TEMPORARY "Clear project data" button (Settings > Danger zone). Off by default; set to true only for testing.
+# With dry_run = false (live mode) the app shows a red warning in Settings while this is on.
+enable_clear_project = false

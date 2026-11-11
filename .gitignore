@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# Local config (copy config.example.toml -> config.toml)
+config.toml
+
+# Data: databases, workbooks, generated files
+*.db
+*.db-wal
+*.db-shm
+*.xlsx
+*.xlsm
+previews/
+snapshots/
+backups/
+logs/

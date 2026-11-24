@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-import re
-
 from ..domain.models import (
     FLAG_ACTUAL_FINISH_LATE, FLAG_COMPLETE_NO_ACTUAL_FINISH, FLAG_MISSING_DATA, FLAG_MISSING_FAIL, FLAG_MISSING_OWNER,
     FLAG_MISSING_REPORT_EMAIL, FLAG_PASS_FAIL_MISMATCH, HISTORY_SUFFIX, NOTE_SUFFIX,
     Flag, Item, Problem,
 )
 from ..excel.reader import RawRow
-from ..excel.sheets import DEFECT_LIST, TEST_PROGRESS, UAT_PLAN
+from ..excel.sheets import (
+    DEFECT_LIST, TEST_PROGRESS, UAT_PLAN, is_defect_item, is_group_header, is_item_row,
+    is_test_progress_item,
+)
 from ..parsing.dates import DateWindow, fmt, parse_date_cell, time_cell_problem
 from ..parsing.status import normalize_defect_status, normalize_task_status
 from ..parsing.text import cell_text, collapse, parse_number, task_no_text
@@ -64,9 +65,6 @@ def _status(item: Item, value, normalizer) -> str | None:
 
 # --------------------------------------------------------------------------- UAT Plan
 
-_GROUP_LETTER = re.compile(r"[A-Za-z]")
-
-
 def normalize_uat_plan(rows: list[RawRow], window: DateWindow) -> list[Item]:
     items: list[Item] = []
     group: str | None = None
@@ -75,10 +73,12 @@ def normalize_uat_plan(rows: list[RawRow], window: DateWindow) -> list[Item]:
         v = r.values
         g = cell_text(v.get("group"))
         tno = task_no_text(v.get("task_no"))
-        if _GROUP_LETTER.fullmatch(g) and not tno:          # group header row, e.g. 'A' + 'SETUP...'
+        if is_group_header(v):                              # group header row, e.g. 'A' + 'SETUP...'
             group, title = g.upper(), cell_text(v.get("task_name"))
             continue
         if group is None:                                   # rows above group A (Pre-Implement Activity)
+            continue
+        if not is_item_row(UAT_PLAN, v):                    # e.g. only a leftover App ID in the row
             continue
         name = cell_text(v.get("task_name"))
         item = Item(
@@ -117,7 +117,7 @@ def normalize_test_progress(rows: list[RawRow], window: DateWindow) -> list[Item
         v = r.values
         app = cell_text(v.get("application"))
         no = task_no_text(v.get("no"))
-        if collapse(app) == "grand total" or (not app and not no):
+        if not is_test_progress_item(v):                    # Grand Total / no Application and no No.
             continue
         item = Item(
             sheet=TEST_PROGRESS, excel_row=r.excel_row,
@@ -166,7 +166,8 @@ def normalize_test_progress(rows: list[RawRow], window: DateWindow) -> list[Item
                                        "No Traffic Light: " + ", ".join(missing) + " empty or under review"))
         if f["actual_finish"] and f["planned_finish"] and f["actual_finish"] > f["planned_finish"]:
             item.flags.append(Flag(FLAG_ACTUAL_FINISH_LATE,
-                                   f"Actual Finish {fmt(f['actual_finish'])} > Planned Finish {fmt(f['planned_finish'])}"))
+                                   f"Actual Finish {fmt(f['actual_finish'])} > "
+                                   f"Planned Finish {fmt(f['planned_finish'])}"))
         items.append(item)
     return items
 
@@ -178,7 +179,7 @@ def normalize_defects(rows: list[RawRow], window: DateWindow) -> list[Item]:
     for r in rows:
         v = r.values
         no = task_no_text(v.get("no"))
-        if all(cell_text(val) == "" for k, val in v.items() if k != "no"):
+        if not is_defect_item(v):
             continue                                        # pre-numbered empty rows
         detail = cell_text(v.get("detail"))
         item = Item(

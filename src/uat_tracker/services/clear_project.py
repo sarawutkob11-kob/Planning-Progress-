@@ -152,6 +152,20 @@ def clear_project(cfg, repo, actor, *, typed_name: str) -> ClearResult:
     return ClearResult(zpath, before)
 
 
+def _attachment_targets(z: zipfile.ZipFile, attachment_dir: Path) -> list[tuple[str, Path]]:
+    """(zip entry, file to write) for every attachment in the backup. An entry that would land outside the
+    attachment folder ('../', absolute path, drive letter) is refused: ClearError, nothing restored."""
+    root = Path(attachment_dir).resolve()
+    out = []
+    for name in z.namelist():
+        if name.startswith("attachments/") and not name.endswith("/"):
+            target = (root / name[len("attachments/"):]).resolve()
+            if target == root or not target.is_relative_to(root):
+                raise ClearError(f"Backup refused: file {name!r} would be written outside the attachment folder")
+            out.append((name, target))
+    return out
+
+
 def restore_backup(cfg, zip_path: Path, *, editor: str) -> dict:
     """Put a clear-project backup back (DB + attachments). The app must be closed for this project.
     The current DB is kept next to it as tracker.db.before-restore-<stamp>."""
@@ -160,6 +174,7 @@ def restore_backup(cfg, zip_path: Path, *, editor: str) -> dict:
         man = json.loads(z.read("manifest.json"))
         if man.get("project_id") != cfg.project_id:
             raise ClearError(f"This backup is for project {man.get('project_id')!r}, not {cfg.project_id!r}")
+        attachments = _attachment_targets(z, cfg.attachment_dir)    # checked before anything is changed
         stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
         if cfg.db_path.exists():                       # backup API: includes what is still in the -wal file
             keep = sqlite3.connect(cfg.db_path)
@@ -179,11 +194,9 @@ def restore_backup(cfg, zip_path: Path, *, editor: str) -> dict:
             dst.close()
             src.close()
             tmp.unlink(missing_ok=True)
-        for name in z.namelist():
-            if name.startswith("attachments/") and not name.endswith("/"):
-                target = cfg.attachment_dir / name[len("attachments/"):]
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(z.read(name))
+        for name, target in attachments:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(z.read(name))
     from ..storage.sqlite_repo import SqliteRepository
     repo = SqliteRepository(cfg.db_path, shared=cfg.shared_db)     # the restored DB: note the restore in it
     try:

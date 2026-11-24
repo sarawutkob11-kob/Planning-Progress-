@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import datetime as dt
 import re
-from dataclasses import dataclass
 
 from ..alerts.rules import is_complete_text
 from ..domain.models import CHANNEL_IMPORT, CHANNEL_RESTORE, DATE_FIELDS

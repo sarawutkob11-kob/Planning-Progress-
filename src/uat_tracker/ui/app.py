@@ -83,25 +83,27 @@ class AppController(QObject):
     def visible_projects(self) -> list[dict]:
         return projects.projects_for(self.base, self.appdb, self.person.email)
 
-    def open_best(self, preferred: str | None = None, keep_current: bool = False) -> None:
-        mine = self.visible_projects()
+    def open_best(self, preferred: str | None = None, keep_current: bool = False,
+                  skip: frozenset[str] = frozenset()) -> None:
+        """skip: projects that just failed to open (not a member any more) - never tried again in this round."""
+        mine = [x for x in self.visible_projects() if x["id"] not in skip]
         if not mine:
             self._show_no_project()
             return
         want = preferred or (self.ctx.cfg.project_id if keep_current and self.ctx else None) \
             or read_profile_data(self.base.profile_path).get("last_project")
         p = next((x for x in mine if x["id"] == want), mine[0])
-        self.open_project(p["id"])
+        self.open_project(p["id"], skip=skip)
 
-    def open_project(self, project_id: str) -> None:
+    def open_project(self, project_id: str, skip: frozenset[str] = frozenset()) -> None:
         project = self.appdb.get_project(project_id)
         self._close_current()
         base_cfg = projects.project_config(self.base, project)
         cfg, repo = projects.open_project(self.base, project)
         actor = open_profile(cfg, repo)
-        if actor is None:                                # not (or no longer) a member: back to the list
-            repo.close()
-            self.open_best()
+        if actor is None:                                # not (or no longer) a member: try the others, else
+            repo.close()                                 # the no-project page (each project tried once)
+            self.open_best(skip=skip | {project_id})
             return
         projects.remember_project(self.base, project_id)
         ctx = Ctx(base_cfg, repo)

@@ -27,11 +27,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..alerts.outbox import alert_pmo
+from ..config import apply_overrides
 from ..domain.models import CHANNEL_EXCEL_SYNC, CHANNEL_RESTORE
 from ..excel.reader import copy_shared, sha256_file
 from ..excel.sheets import DB_TO_SHEET_KEY, SHEETS, TEST_PROGRESS, UAT_PLAN, WRITABLE, with_overrides
-from ..excel.writer import (ROW_FIELD, CellWrite, ComWorkbook, WorkbookBusy, WorkbookLocked, WriterError,
-                            excel_windows_for, write_workbook)
+from ..excel.writer import (ROW_FIELD, CellWrite, ComWorkbook, RowsMoved, WorkbookBusy, WorkbookLocked,
+                            WriterError, excel_windows_for, write_workbook)
 from .importer import S_PAUSED, ImportResult, run_import
 from .values import derive_excel_value
 
@@ -95,7 +96,8 @@ class SyncService:
     def _alert(self, title, detail):
         if self.sender is None:
             return
-        alert_pmo(self.cfg, self.repo, self.sender, title, detail, send_date=self._now()[:10],
+        cfg = apply_overrides(self.cfg, self.repo)    # PMO email changed in Settings while the sync runs
+        alert_pmo(cfg, self.repo, self.sender, title, detail, send_date=self._now()[:10],
                   now=self._now(), editor=SYNC_EDITOR)
 
     def conflict_copies(self) -> list[Path]:
@@ -202,11 +204,12 @@ class SyncService:
             self._alert("Excel sync stopped: OneDrive conflict copy", msg)
             return FlushResult("blocked", msg)
 
-        with self.repo.transaction():                 # 'writing' left by a run that stopped mid-way
+        with self.repo.transaction():                 # 'writing' left by a run that stopped mid-way: due now
             for p in self.repo.all_pending():
                 if p["status"] == "writing":
                     self.repo.set_pending_state(p["sheet"], p["item_id"], p["field"], status="pending",
-                                                attempts=p["attempts"], last_error="previous write interrupted")
+                                                attempts=p["attempts"], first_failed_at=p["first_failed_at"],
+                                                next_attempt_at=self._now(), last_error="previous write interrupted")
         due = self._due()
         if not due:
             return FlushResult("nothing")
@@ -229,7 +232,8 @@ class SyncService:
         for name in defs:
             items = self.repo.load_items(name)
             rows[name] = {i: r["excel_row"] for i, r in items.items() if r.get("active") and r.get("excel_row")}
-        new_rows = {(p["sheet"], p["item_id"]) for p in self.repo.all_pending() if p["field"] == ROW_FIELD}
+        row_status = {(p["sheet"], p["item_id"]): p["status"] for p in self.repo.all_pending()
+                      if p["field"] == ROW_FIELD}
         new_groups: set[str] = set()                  # a new UAT Plan group gets its header row once per write
         held: set[tuple[str, str]] = set()
         for p in due:
@@ -246,8 +250,12 @@ class SyncService:
                     new_groups.add(rec.get("group_code"))
                 writes.append(w)
                 continue
-            if (p["sheet"], p["item_id"]) in new_rows:
-                continue                              # the new row carries this value
+            new_row = row_status.get((p["sheet"], p["item_id"]))
+            if new_row == "failed":                   # the row was never created: nowhere to write this value
+                self._fail(p, "The item's new row could not be created in Excel")
+                continue
+            if new_row is not None:
+                continue                              # the new row (still queued) carries this value
             row = rows.get(p["sheet"], {}).get(p["item_id"])
             if rec is None or row is None:
                 self._fail(p, "Item is no longer in the Excel file")
@@ -260,7 +268,7 @@ class SyncService:
         backup = self.backup(f"before writing {len(writes)} change(s)")
         try:
             report = write_workbook(self.opener, self.path, defs, writes, rows)
-        except (WorkbookLocked, WorkbookBusy) as exc:
+        except (WorkbookLocked, WorkbookBusy, RowsMoved) as exc:      # RowsMoved: read the file again first
             return self._retry(due, str(exc), backup)
         except WriterError as exc:
             return self._retry(due, f"Excel write failed: {exc}", backup)
@@ -330,7 +338,7 @@ class SyncService:
             self.pull()
             defs = {name: with_overrides(sd, self.cfg.header_overrides) for name, sd in SHEETS.items()}
             rows = {name: {i: r["excel_row"] for i, r in self.repo.load_items(name).items()
-                          if r.get("active") and r.get("excel_row")}
+                           if r.get("active") and r.get("excel_row")}
                     for name in defs}
             backup = self.backup("before writing App IDs")
             try:

@@ -16,7 +16,7 @@ import logging
 import datetime as dt
 from dataclasses import dataclass, field
 
-from ..alerts.outbox import DRY, LIVE, Outgoing, alert_pmo, deliver, mode_of
+from ..alerts.outbox import LIVE, Outgoing, alert_pmo, deliver, mode_of
 from ..alerts.rules import R3, R3Event, evaluate
 from ..alerts.templates import render
 from ..domain.models import CHANNEL_SYSTEM

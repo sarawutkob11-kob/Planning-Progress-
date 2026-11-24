@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QDoubleSpinBox, QFi
 
 from ...alerts.templates import SUBJECTS
 from ...config import email_time
-from ...parsing.dates import fmt
 from ...services import auth
 from ...services.auth import PermissionDenied
 from ...services import clear_project, projects, weekly_ai

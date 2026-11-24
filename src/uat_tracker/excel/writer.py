@@ -23,21 +23,31 @@ import os
 import re
 import threading
 import time
+from collections.abc import Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Protocol
 from urllib.parse import unquote
 
 from openpyxl.utils import get_column_letter
 
 from ..parsing.headers import HeaderError, header_label, map_headers
-from .sheets import APP_ID_HEADER, APP_ID_KEY, DB_TO_SHEET_KEY, SheetDef
+from .sheets import APP_ID_HEADER, APP_ID_KEY, DB_TO_SHEET_KEY, SheetDef, is_item_row
 
 log = logging.getLogger(__name__)
 
 EXCEL_DATE_FORMAT = "[$-409]dd-mmm-yyyy"      # English month names whatever the PC locale
 _EXCEL_EPOCH = dt.date(1899, 12, 30)
 MAX_HEADER_COLS = 80
+# Range.Find arguments (Excel constants)
+# LookIn: xlFormulas. Finds cells in rows hidden by hand, collapsed groups and hidden columns (xlValues does
+# not), but is NOT reliable under a filter (sheet AutoFilter or a filtered Table, both set ws.FilterMode)
+# nor on a protected sheet with FormulaHidden cells -> last_data_row falls back to UsedRange there.
+XL_FORMULAS = -4123
+XL_PART = 2                # LookAt: xlPart
+XL_BY_ROWS = 1             # SearchOrder: xlByRows
+XL_PREVIOUS = 2            # SearchDirection: xlPrevious
 ROW_FIELD = "(row)"        # write-queue entry meaning "create this item's row"
 
 
@@ -51,6 +61,11 @@ class WorkbookLocked(WriterError):
 
 class WorkbookBusy(WriterError):
     """Workbook open in Excel with unsaved edits. Retry later."""
+
+
+class RowsMoved(WriterError):
+    """Rows in the workbook moved since the last read (a row inserted / deleted / sorted in the open Excel).
+    Nothing is written; the change is retried after the file is read again."""
 
 
 @dataclass(frozen=True)
@@ -72,6 +87,34 @@ class WriteReport:
 
 # --------------------------------------------------------------------------- core logic
 
+class SheetLike(Protocol):
+    """What the core logic needs from one sheet (ComSheet in the app, OpenpyxlSheet in tests)."""
+
+    def header_values(self) -> list[object]: ...
+    def insert_column(self, col: int) -> None: ...
+    def insert_row(self, row: int, below: bool = False) -> None: ...
+    def set_formula(self, row: int, col: int, formula: str) -> None: ...
+    def last_row(self) -> int: ...
+    def last_data_row(self, col: int) -> int: ...
+    def column_values(self, col: int, first_row: int, last_row: int) -> list[object]: ...
+    def row_values(self, row: int, first_col: int, last_col: int) -> list[object]: ...
+    def hide_column(self, col: int) -> None: ...
+    def get(self, row: int, col: int) -> object: ...
+    def has_formula(self, row: int, col: int) -> bool: ...
+    def set_date(self, row: int, col: int, d: dt.date) -> None: ...
+    def set_number(self, row: int, col: int, n: object) -> None: ...
+    def set_text(self, row: int, col: int, text: str) -> None: ...
+    def clear(self, row: int, col: int) -> None: ...
+
+
+class BookLike(Protocol):
+    """What the core logic needs from a workbook (ComWorkbook in the app, OpenpyxlWorkbook in tests)."""
+
+    def sheet(self, name: str) -> SheetLike: ...
+    def save(self) -> None: ...
+    def close(self) -> None: ...
+
+
 # New-row formulas: field -> (template, columns used). Same shape as the PMO's existing rows (=E2/D2).
 ROW_FORMULAS = {"pct_progress": ("={0}{r}/{1}{r}", "executed", "total_tc")}
 
@@ -84,9 +127,87 @@ def _table_end(labels: list[str], blank_first: bool) -> int:
     return len(labels)
 
 
-def apply_writes(book, sheet_defs: dict[str, SheetDef], writes: list[CellWrite],
+def _id_text(ws: SheetLike, row: int, id_col: int) -> str:
+    return str(ws.get(row, id_col) or "").strip()
+
+
+def _holds_item(ws: SheetLike, sheet: str, row: int, cols: dict[str, int]) -> bool:
+    """Whether the row is an item row by the importer's rules (excel.sheets.is_item_row, App ID never counted):
+    not an empty row, a UAT Plan group header, a Test Progress Grand Total or a pre-numbered empty defect row.
+    Such a row in an item's place with no App ID means the item's row was deleted (e.g. the last item)."""
+    return is_item_row(sheet, {k: ws.get(row, c) for k, c in cols.items() if k != APP_ID_KEY})
+
+
+def _row_holds_item(ws: SheetLike, sheet: str, row: int, cols: dict[str, int]) -> bool:
+    """Same rule as _holds_item, the row's table cells read with one call (one Range through COM)."""
+    data = {k: c for k, c in cols.items() if k != APP_ID_KEY}
+    if not data:
+        return False
+    lo = min(data.values())
+    values = ws.row_values(row, lo, max(data.values()))
+    return is_item_row(sheet, {k: values[c - lo] for k, c in data.items()})
+
+
+def _moved_rows(ws: SheetLike, sheet: str, id_col: int, expected: dict[str, int], cols: dict[str, int],
+                written: frozenset[str] = frozenset()) -> list[str]:
+    """Rows that no longer hold the item they held at the last read. An App ID cell may be filled only when
+    it is blank, unknown, or a copy of an ID that is still in its own row (a copied row) - and only on a row
+    that is still an item row; an ID that sits somewhere else, another known item's ID found in the wrong
+    row, or a non-item row (empty, group header, Grand Total, pre-numbered) in an item's place means the
+    rows moved. written: items that get a cell written now - their row must still be an item row even with
+    the right App ID (its content may have been cleared after the read, the hidden App ID left behind)."""
+    if not expected:
+        return []
+    last = max(ws.last_data_row(id_col), max(expected.values()))
+    found: dict[str, list[int]] = {}
+    for r, value in enumerate(ws.column_values(id_col, 2, last), start=2):   # one read, not one per cell
+        if text := str(value or "").strip():
+            found.setdefault(text, []).append(r)
+    in_row = {r: i for i, rs in found.items() for r in rs}
+    problems = []
+    for item_id, row in sorted(expected.items(), key=lambda kv: kv[1]):
+        cur = in_row.get(row, "")
+        if cur == item_id:
+            if item_id in written and not _row_holds_item(ws, sheet, row, cols):
+                problems.append(f"row {row} no longer holds an item (only its App ID {item_id} is left)")
+            continue
+        if item_id in found:
+            problems.append(f"{item_id} expected in row {row} but found in row {found[item_id][0]}")
+        elif cur in expected and expected[cur] not in found[cur]:
+            problems.append(f"row {row} holds {cur}, expected {item_id}")
+        elif cur not in expected and not _holds_item(ws, sheet, row, cols):
+            problems.append(f"row {row} no longer holds an item, expected {item_id}")
+    return problems
+
+
+def _check_rows_unmoved(book: BookLike, sheet_defs: dict[str, SheetDef], rows: dict[str, dict[str, int]],
+                        writes: Sequence[CellWrite] = ()) -> None:
+    """Before anything is written: every sheet that already has the App ID column must still have its items in
+    the rows of the last read, and every row about to get a cell written must still be an item row. Else raise
+    RowsMoved (nothing touched; the sync reads the file again and retries)."""
+    problems = []
+    for name, sd in sheet_defs.items():
+        ws = book.sheet(name)
+        labels = [header_label(v) for v in ws.header_values()]
+        hmap = map_headers(labels, list(sd.fields), name, sd.blank_first_as)
+        if APP_ID_KEY not in hmap.columns:
+            continue
+        cols = {k: c + 1 for k, c in hmap.columns.items()}
+        written = frozenset(w.item_id for w in writes if w.sheet == name and w.field != ROW_FIELD)
+        moved = _moved_rows(ws, name, cols[APP_ID_KEY], rows.get(name, {}), cols, written)
+        if moved:
+            more = f" (+{len(moved) - 3} more)" if len(moved) > 3 else ""
+            problems.append(f"{name}: " + "; ".join(moved[:3]) + more)
+    if problems:
+        raise RowsMoved("Rows in Excel moved since the last read; nothing written, retried after reading the "
+                        "file again. " + " | ".join(problems))
+
+
+def apply_writes(book: BookLike, sheet_defs: dict[str, SheetDef], writes: list[CellWrite],
                  rows: dict[str, dict[str, int]]) -> WriteReport:
-    """rows: sheet -> {item_id: excel_row} for all active items (from the last import)."""
+    """rows: sheet -> {item_id: excel_row} for all active items (from the last import).
+    Raises RowsMoved (before writing anything) when the rows no longer match the last read."""
+    _check_rows_unmoved(book, sheet_defs, rows, writes)
     report = WriteReport()
     for name, sd in sheet_defs.items():
         sheet_writes = [w for w in writes if w.sheet == name]
@@ -103,9 +224,10 @@ def apply_writes(book, sheet_defs: dict[str, SheetDef], writes: list[CellWrite],
             hmap = map_headers(labels, list(sd.fields), name, sd.blank_first_as)
         id_col = hmap.columns[APP_ID_KEY] + 1
 
-        # App IDs: every active item's row carries its ID (fixes blanks and copied rows).
+        # App IDs: every active item's row carries its ID (fixes blanks and copied rows). Safe here: the
+        # rows were checked above, so a cell that differs is blank, unknown or a copied row's duplicate.
         for item_id, row in sorted(rows.get(name, {}).items(), key=lambda kv: kv[1]):
-            if str(ws.get(row, id_col) or "").strip() != item_id:
+            if _id_text(ws, row, id_col) != item_id:
                 ws.set_text(row, id_col, item_id)
                 report.ids_written += 1
 
@@ -113,7 +235,7 @@ def apply_writes(book, sheet_defs: dict[str, SheetDef], writes: list[CellWrite],
         row_writes = sorted((w for w in sheet_writes if w.field == ROW_FIELD), key=lambda w: -w.excel_row)
         for w in cell_writes:
             key3 = (w.sheet, w.item_id, w.field)
-            if str(ws.get(w.excel_row, id_col) or "").strip() != w.item_id:
+            if _id_text(ws, w.excel_row, id_col) != w.item_id:
                 report.failed.append((key3, f"Row {w.excel_row} is not {w.item_id} any more"))
                 continue
             sheet_key = DB_TO_SHEET_KEY.get(w.field, w.field)
@@ -369,6 +491,44 @@ class ComSheet:
         return int(ur.Row) + int(ur.Rows.Count) - 1
 
     @_busy_retry
+    def last_data_row(self, col: int) -> int:
+        """Last row with something in this column, hidden rows included (UsedRange can reach row 1,048,576
+        after formatting). End(xlUp) skips every hidden row; Find with LookIn=xlFormulas sees rows hidden by
+        hand, collapsed groups and a hidden column (checked in real Excel). Searching backwards after the first
+        cell wraps to the bottom of the sheet first, so row 1,048,576 is included.
+        Find is NOT reliable (checked in real Excel) under a filter - a sheet AutoFilter or a filtered Table,
+        both set ws.FilterMode - where it can return e.g. row 1, nor on a protected sheet whose cells are
+        FormulaHidden, where it returns None. Then UsedRange is used: it always reaches the last filled row.
+        Do not remove this fallback."""
+        if self.ws.FilterMode or self.ws.ProtectContents:
+            ur = self.ws.UsedRange
+            return int(ur.Row) + int(ur.Rows.Count) - 1
+        # positional: What, After, LookIn, LookAt, SearchOrder, SearchDirection
+        hit = self.ws.Columns(col).Find("*", self.ws.Cells(1, col), XL_FORMULAS, XL_PART, XL_BY_ROWS,
+                                        XL_PREVIOUS)
+        return 1 if hit is None else int(hit.Row)
+
+    @_busy_retry
+    def column_values(self, col: int, first_row: int, last_row: int) -> list[object]:
+        """Values of rows first_row..last_row of one column, read with a single COM call."""
+        if last_row < first_row:
+            return []
+        vals = self.ws.Range(self.ws.Cells(first_row, col), self.ws.Cells(last_row, col)).Value
+        if first_row == last_row:                         # one cell: COM returns the value, not a tuple
+            return [vals]
+        return [row[0] for row in vals]
+
+    @_busy_retry
+    def row_values(self, row: int, first_col: int, last_col: int) -> list[object]:
+        """Values of columns first_col..last_col of one row, read with a single COM call."""
+        if last_col < first_col:
+            return []
+        vals = self.ws.Range(self.ws.Cells(row, first_col), self.ws.Cells(row, last_col)).Value
+        if first_col == last_col:                         # one cell: COM returns the value, not a tuple
+            return [vals]
+        return list(vals[0])
+
+    @_busy_retry
     def hide_column(self, col):
         self.ws.Columns(col).Hidden = True
 
@@ -504,6 +664,15 @@ class OpenpyxlSheet:
 
     def last_row(self):
         return self.ws.max_row
+
+    def last_data_row(self, col: int) -> int:
+        return self.ws.max_row
+
+    def column_values(self, col: int, first_row: int, last_row: int) -> list[object]:
+        return [self.ws.cell(r, col).value for r in range(first_row, last_row + 1)]
+
+    def row_values(self, row: int, first_col: int, last_col: int) -> list[object]:
+        return [self.ws.cell(row, c).value for c in range(first_col, last_col + 1)]
 
     def hide_column(self, col):
         from openpyxl.utils import get_column_letter

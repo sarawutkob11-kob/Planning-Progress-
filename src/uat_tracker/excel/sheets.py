@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from ..parsing.headers import FieldSpec
+from ..parsing.text import cell_text, collapse, task_no_text
 
 UAT_PLAN = "UAT Plan"
 TEST_PROGRESS = "Test Progress"
@@ -76,6 +79,50 @@ SHEETS: dict[str, SheetDef] = {
 
 APP_ID_KEY = "app_id"
 APP_ID_HEADER = "App ID"
+
+# --------------------------------------------------------------------------- which rows are items
+# One set of rules for the importer (services.normalize) and the writer's moved-row check.
+# `values`: field key -> raw cell value of one row. The hidden App ID column never counts: a row that holds only
+# an App ID (or only No. + App ID on Defect List) is not an item, for the importer and the writer alike.
+
+_GROUP_LETTER = re.compile(r"[A-Za-z]")
+
+
+def _content(values: Mapping[str, object]) -> dict[str, object]:
+    """The row's values without the App ID column."""
+    return {k: v for k, v in values.items() if k != APP_ID_KEY}
+
+
+def is_group_header(values: Mapping[str, object]) -> bool:
+    """UAT Plan group header row, e.g. 'A' + 'SETUP...' with no Task No."""
+    return bool(_GROUP_LETTER.fullmatch(cell_text(values.get("group")))) and not task_no_text(values.get("task_no"))
+
+
+def is_test_progress_item(values: Mapping[str, object]) -> bool:
+    """Not the Grand Total row and not a row without both Application and No."""
+    app = cell_text(values.get("application"))
+    return collapse(app) != "grand total" and bool(app or task_no_text(values.get("no")))
+
+
+def is_defect_item(values: Mapping[str, object]) -> bool:
+    """A pre-numbered row (only 'No.' filled, App ID not counted) is not a defect yet."""
+    return any(cell_text(v) != "" for k, v in _content(values).items() if k != "no")
+
+
+def is_item_row(sheet: str, values: Mapping[str, object]) -> bool:
+    """Whether a row can hold an item of `sheet` (UAT Plan: rows above group A are not seen here).
+    App ID is not counted, so a row with only an App ID left in it is not an item row."""
+    values = _content(values)
+    if all(cell_text(v) == "" for v in values.values()):
+        return False
+    if sheet == UAT_PLAN:
+        return not is_group_header(values)
+    if sheet == TEST_PROGRESS:
+        return is_test_progress_item(values)
+    if sheet == DEFECT_LIST:
+        return is_defect_item(values)
+    return True
+
 
 # Part 3: fields the app may write back to Excel (DB field name). Formula cells are never written.
 WRITABLE: dict[str, frozenset[str]] = {

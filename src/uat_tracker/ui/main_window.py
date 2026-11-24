@@ -7,7 +7,7 @@ import logging
 import datetime as dt
 import threading
 
-from PySide6.QtCore import Qt, QThread, QTimer
+from PySide6.QtCore import QThread, QTimer
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QComboBox, QFrame, QHBoxLayout, QLineEdit, QMainWindow,
                                QPushButton, QStackedWidget, QVBoxLayout, QWidget)
 

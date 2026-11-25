@@ -16,9 +16,9 @@ import logging
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Qt
+from PySide6.QtCore import QEvent, QLocale, QObject, Qt
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QAbstractScrollArea, QAbstractSpinBox, QApplication, QWidget
 
 from ..services import projects
 from ..services.importer import S_PAUSED
@@ -180,11 +180,34 @@ class AppController(QObject):
         QApplication.instance().quit()
 
 
+class NoWheelOnSpinBoxes(QObject):
+    """Number / time boxes change only by their arrow buttons or the keyboard, never by the mouse wheel.
+    The wheel goes to the page instead, so scrolling past a box cannot change its value by accident."""
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 (Qt name)
+        if event.type() != QEvent.Wheel or not isinstance(obj, QWidget):
+            return False
+        box = obj if isinstance(obj, QAbstractSpinBox) else obj.parentWidget()
+        if not isinstance(box, QAbstractSpinBox):
+            return False
+        area = box.parentWidget()
+        while area is not None and not isinstance(area, QAbstractScrollArea):
+            area = area.parentWidget()
+        if area is not None:   # let the page scroll instead
+            bar = area.verticalScrollBar()
+            bar.setValue(bar.value() - event.angleDelta().y() // 120 * bar.singleStep() * 3)
+        return True
+
+
 def run(base, config_path: Path, start_sync: bool = True) -> int:
+    # Windows Thai locale makes number boxes show Thai digits (๑๒๓); always use 0-9.
+    QLocale.setDefault(QLocale(QLocale.English, QLocale.UnitedStates))
     app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setFont(QFont("IBM Plex Sans Thai", 10) if "IBM Plex Sans Thai" in _families() else QFont("Tahoma", 10))
     app.setStyleSheet(QSS)
+    app._no_wheel = NoWheelOnSpinBoxes(app)
+    app.installEventFilter(app._no_wheel)
     appdb = projects.open_app_db(base)
     set_lang(appdb.get_setting("ui.lang") or "en")
     ctl = AppController(base, appdb, config_path, start_sync=start_sync)

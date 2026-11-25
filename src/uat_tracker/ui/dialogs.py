@@ -143,6 +143,10 @@ class UpdateDialog(_Base):
                 sb.setValue(int(r.get(f) or 0))
                 self.inputs[f] = sb
                 self.form.addRow(t(key), sb)
+            rb = QPlainTextEdit(r.get("report_by") or "")      # may hold several names, one per line
+            rb.setFixedHeight(64)
+            self.inputs["report_by"] = rb
+            self.form.addRow(t("upd.report_by"), rb)
             for f, key in (("report_by_email", "upd.email"), ("cc_emails", "upd.cc")):
                 le = QLineEdit(r.get(f) or "")
                 self.inputs[f] = le

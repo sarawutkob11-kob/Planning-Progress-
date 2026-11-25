@@ -305,7 +305,7 @@ def test_daily_job_writes_calculated_traffic_light(scfg, repo, svc):
     from uat_tracker.services.daily_job import run_daily
     from test_alerts import fake_fetch
     run_daily(scfg, repo, FakeSender(), clock=dt.datetime(2026, 11, 6, 8, 30), fetcher=fake_fetch, sync=svc)
-    assert cell(scfg.excel_path, TP, "TP-38", "Traffic Light") == "Amber"
+    assert cell(scfg.excel_path, TP, "TP-38", "Traffic Light") == "At risk of delay"  # T13/T14: old "Amber" rewritten
     assert cell(scfg.excel_path, TP, "TP-1", "Traffic Light") == "Complete"
     assert repo.all_pending() == []
 

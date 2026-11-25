@@ -117,7 +117,7 @@ def test_create_project_file_name_template_and_empty(base, appdb, tmp_path, open
     tp = wb["Test Progress"]
     heads = [c.value for c in tp[1]]
     assert heads[2:5] == ["Report By", "Report By Email", "CC Email"]              # approved 12a
-    assert [dv.formula1 for dv in tp.data_validations.dataValidation] == ['"Green,Amber,Red"']
+    assert [dv.formula1 for dv in tp.data_validations.dataValidation] == ['"On track,At risk of delay,Delayed"']
     assert len([r for cf in tp.conditional_formatting for r in cf.rules]) == 5
     legend_col = len(template()["sheets"][1]["columns"]) + 2                         # approved 12b
     assert tp.cell(1, legend_col).value == "Status" and tp.cell(1, legend_col + 1).value == "Definition"

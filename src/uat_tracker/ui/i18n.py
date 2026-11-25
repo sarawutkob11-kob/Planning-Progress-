@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from ..services.traffic_light import AMBER, GREEN, LABEL_EN, LABEL_TH, RED
+
 TEXT: dict[str, tuple[str, str]] = {      # key: (English, Thai)
     # shell
     "app": ("Planning Progress", "Planning Progress"),
@@ -26,6 +28,7 @@ TEXT: dict[str, tuple[str, str]] = {      # key: (English, Thai)
     "work.restoring": ("Restoring the backup…", "กำลังกู้คืนไฟล์สำรอง…"),
     "work.relinking": ("Checking the new file…", "กำลังตรวจไฟล์ใหม่…"),
     "work.clearing": ("Clearing project data…", "กำลังล้างข้อมูลโปรเจกต์…"),
+    "work.deleting": ("Deleting the project…", "กำลังลบโปรเจกต์…"),
     "dry_run": ("DRY RUN", "DRY RUN"),
     "live": ("LIVE EMAIL", "ส่งอีเมลจริง"),
     "lang": ("Language", "ภาษา"),
@@ -45,9 +48,9 @@ TEXT: dict[str, tuple[str, str]] = {      # key: (English, Thai)
     "tag.Overdue": ("Overdue", "เลยกำหนด"),
     "tag.Today": ("Today", "วันนี้"),
     "tag.No target": ("No target", "ไม่มีวันเป้าหมาย"),
-    "tag.Red": ("Red", "แดง"),
-    "tag.Amber": ("Amber", "เหลือง"),
-    "tag.Green": ("Green", "เขียว"),
+    "tag.Red": (LABEL_EN[RED], LABEL_TH[RED]),          # Delayed / ล่าช้า
+    "tag.Amber": (LABEL_EN[AMBER], LABEL_TH[AMBER]),    # At risk of delay / มีความเสี่ยงล่าช้า
+    "tag.Green": (LABEL_EN[GREEN], LABEL_TH[GREEN]),    # On track / ตามแผน
     "tag.Complete": ("Complete", "เสร็จ"),
     "tag.Missing": ("Missing data", "ข้อมูลไม่ครบ"),
     "tag.Missing data": ("Missing data", "ข้อมูลไม่ครบ"),
@@ -69,6 +72,8 @@ TEXT: dict[str, tuple[str, str]] = {      # key: (English, Thai)
     "wk.no_pmo": ("PMO email not set: preview file only", "ยังไม่ได้ตั้ง PMO email: บันทึกเป็นไฟล์ preview เท่านั้น"),
     "wk.ai_yes": ("AI summary: {m} ({i} in / {o} out tokens)", "สรุป AI: {m} ({i} / {o} token)"),
     "wk.ai_no": ("No AI summary: {e}", "ไม่มีสรุป AI: {e}"),
+    "wk.invalid": ("Skipped {n} invalid address(es) (not in the email): {w}",
+                   "ข้ามอีเมลที่ไม่ถูกต้อง {n} รายการ (ไม่แสดงในเมล): {w}"),
     "wk.send": ("Send", "ส่ง"),
     "wk.sent": ("Weekly report: {r}", "รายงานประจำสัปดาห์: {r}"),
     "wk.as_of": ("As of", "ข้อมูล ณ"),
@@ -166,6 +171,7 @@ TEXT: dict[str, tuple[str, str]] = {      # key: (English, Thai)
     "upd.total": ("Total TC", "Total TC"),
     "upd.pass": ("#Pass", "#Pass"),
     "upd.fail": ("#Fail", "#Fail"),
+    "upd.report_by": ("Report By", "Report By"),
     "upd.email": ("Report By Email", "Report By Email"),
     "upd.cc": ("CC Email (; separated)", "CC Email (คั่นด้วย ;)"),
     "upd.bad_email": ("Not a valid email address.", "รูปแบบอีเมลไม่ถูกต้อง"),
@@ -173,7 +179,7 @@ TEXT: dict[str, tuple[str, str]] = {      # key: (English, Thai)
     "tp.executed": ("Executed / Total", "ทดสอบแล้ว / ทั้งหมด"),
     "tp.pass": ("Pass", "ผ่าน"),
     "tp.fail": ("Fail", "ไม่ผ่าน"),
-    "tp.amber": ("Amber", "เหลือง"),
+    "tp.amber": (LABEL_EN[AMBER], LABEL_TH[AMBER]),
     "f.follow": ("Needs follow-up", "ต้องติดตาม"),
     "f.incomplete": ("Incomplete data", "ข้อมูลไม่ครบ"),
     "f.complete": ("Complete", "เสร็จแล้ว"),
@@ -453,6 +459,27 @@ TEXT: dict[str, tuple[str, str]] = {      # key: (English, Thai)
                        "Archive '{n}' ใช่ไหม? โปรเจกต์จะถูกซ่อน ข้อมูลยังอยู่ครบและนำกลับมาได้"),
     "proj.archived": ("Archived projects", "โปรเจกต์ที่ Archive ไว้"),
     "proj.unarchive": ("Restore selected", "นำกลับมาใช้"),
+    "proj.delete": ("Delete selected permanently…", "ลบโปรเจกต์ที่เลือกถาวร…"),
+    "proj.delete_title": ("Delete project '{n}' permanently", "ลบโปรเจกต์ '{n}' ถาวร"),
+    "proj.delete_will": ("Will be deleted", "สิ่งที่จะถูกลบ"),
+    "proj.delete_list": ("The project in the project list, and its whole data folder {p} (database, users and "
+                         "roles, attachments, snapshots, workbook backups kept there, logs of this project). "
+                         "This can't be undone in the app.",
+                         "โปรเจกต์ในรายการโปรเจกต์ และทั้งโฟลเดอร์ข้อมูล {p} (ฐานข้อมูล, ผู้ใช้และสิทธิ์, ไฟล์แนบ, "
+                         "สำเนา Excel, backup ของไฟล์ Excel ที่อยู่ในโฟลเดอร์นี้, log ของโปรเจกต์นี้) "
+                         "ย้อนกลับในแอปไม่ได้"),
+    "proj.delete_kept": ("Not touched", "สิ่งที่ไม่ถูกแตะ"),
+    "proj.delete_kept_list": ("The Excel file {p} is not touched (not opened, moved or deleted). Also kept: the "
+                              "project history log, the app log files, other projects and shared settings.",
+                              "ไฟล์ Excel {p} ไม่ถูกแตะ (ไม่เปิด ไม่ย้าย ไม่ลบ) และยังเก็บไว้: ประวัติของโปรเจกต์, "
+                              "ไฟล์ log ของแอป, โปรเจกต์อื่น และค่าที่ใช้ร่วมกัน"),
+    "proj.delete_backup": ("A backup zip is made first in {p} (never deleted automatically).",
+                           "ระบบจะทำไฟล์ zip สำรองก่อนลบไว้ที่ {p} (ไม่ถูกลบอัตโนมัติ)"),
+    "proj.delete_type": ("Type the project name to confirm", "พิมพ์ชื่อโปรเจกต์เพื่อยืนยัน"),
+    "proj.delete_go": ("Delete permanently", "ลบถาวร"),
+    "proj.delete_done": ("Project deleted. Backup: {p}", "ลบโปรเจกต์แล้ว ไฟล์สำรอง: {p}"),
+    "proj.delete_left": ("Some files were in use and are left in {p}. Delete that folder yourself later.",
+                         "บางไฟล์ถูกใช้งานอยู่และค้างอยู่ที่ {p} กรุณาลบโฟลเดอร์นี้เองภายหลัง"),
     "proj.shared": ("Shared by all projects", "ตั้งค่าที่ใช้ร่วมกันทุกโปรเจกต์"),
     "proj.shared_note": ("Only an Admin or PMO can change these.", "เฉพาะ Admin หรือ PMO เท่านั้นที่แก้ไขได้"),
     "proj.this": ("This project only", "เฉพาะโปรเจกต์นี้"),

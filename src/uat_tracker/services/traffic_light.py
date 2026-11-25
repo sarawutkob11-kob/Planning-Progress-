@@ -23,6 +23,18 @@ from ..excel.sheets import TEST_PROGRESS
 
 COMPLETE, RED, AMBER, GREEN, MISSING = "Complete", "Red", "Amber", "Green", "Missing"
 
+# Words users see (25-Nov-2026). The codes above stay internal (DB, style keys, R3 rules).
+LABEL_EN = {RED: "Delayed", AMBER: "At risk of delay", GREEN: "On track", COMPLETE: "Complete", MISSING: "Missing data"}
+LABEL_TH = {RED: "ล่าช้า", AMBER: "มีความเสี่ยงล่าช้า", GREEN: "ตามแผน", COMPLETE: "เสร็จ", MISSING: "ข้อมูลไม่ครบ"}
+
+
+def label(color: str | None, lang: str = "en") -> str:
+    """Display word for an internal color code; unknown values are returned as they are."""
+    if not color:
+        return ""
+    table = LABEL_TH if lang == "th" else LABEL_EN
+    return table.get(color, color)
+
 
 @dataclass(frozen=True)
 class Light:
@@ -43,14 +55,22 @@ def _pct(x: float | None) -> str:
     return "-" if x is None else f"{x * 100:.1f}%"
 
 
+def missing_fields(rec: dict) -> list[str]:
+    """Blank required fields: 'Total TC', 'Planned Start', 'Planned Finish' (this order).
+
+    Total TC 0 counts as blank (no %Exec can be computed)."""
+    fields = (("Total TC", "total_tc"), ("Planned Start", "planned_start"), ("Planned Finish", "planned_finish"))
+    return [name for name, key in fields if not rec.get(key)]
+
+
 def compute(rec: dict, today: dt.date, fail_threshold: float) -> Light:
     if rec.get("status") == "Complete":
         return Light(COMPLETE, reason="Status is Complete")
-    total = rec.get("total_tc")
-    ps, pf = _d(rec.get("planned_start")), _d(rec.get("planned_finish"))
-    missing = [n for n, v in (("Total TC", total), ("Planned Start", ps), ("Planned Finish", pf)) if not v]
+    missing = missing_fields(rec)
     if missing:
         return Light(MISSING, reason="Missing data: " + ", ".join(missing))
+    total = rec["total_tc"]
+    ps, pf = _d(rec["planned_start"]), _d(rec["planned_finish"])
     executed = rec.get("executed") or 0
     failed = rec.get("fail_count") or 0
     pct_exec = executed / total

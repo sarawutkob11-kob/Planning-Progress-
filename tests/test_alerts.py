@@ -154,7 +154,7 @@ def test_acceptance_1_first_run_one_r3_email_second_run_none(acfg, repo):
     assert res.result == "ok"
     rows = log(repo)
     assert [(r["rule"], r["result"]) for r in rows] == [("R3", "dry_run")]
-    assert "progress is now Amber" in rows[0]["subject"]
+    assert "progress is now At risk of delay" in rows[0]["subject"]        # T13/T14: display word
     run(acfg, repo, s, dt.date(2026, 11, 9))
     assert len(log(repo, "R3")) == 1
     assert len(s.sent) == 1

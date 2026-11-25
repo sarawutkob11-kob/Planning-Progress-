@@ -26,7 +26,7 @@ from .edits import EditError, edit_item
 from .auth import system_actor
 from .holidays import refresh_year
 from .importer import run_import
-from .traffic_light import MISSING, effective_previous, r3_qualifies, record_colors
+from .traffic_light import MISSING, effective_previous, label, r3_qualifies, record_colors
 from .workdays import WorkCalendar
 
 log = logging.getLogger(__name__)
@@ -168,16 +168,19 @@ def run_daily(cfg, repo, sender, *, clock: dt.datetime | None = None, scheduled:
 
 def _queue_traffic_lights(cfg, repo, items, lights, now) -> int:
     """Computed color -> Test Progress 'Traffic Light' column (approved: auto, not typed).
-    No color (missing data) leaves the cell as it is."""
+    The cell gets the word users see (Delayed / At risk of delay / On track / Complete), so a file that
+    still holds an older word (Red / Amber / Green, or "At risk") is rewritten. No color (missing data)
+    leaves the cell as it is."""
     n = 0
     for item_id, light in lights.items():
         if light.color == MISSING:
             continue
         rec = items.get(item_id) or {}
-        if (rec.get("traffic_light") or "") == light.color:
+        word = label(light.color)
+        if (rec.get("traffic_light") or "") == word:
             continue
         try:
-            if edit_item(cfg, repo, TEST_PROGRESS, item_id, {"traffic_light": light.color}, actor=SYSTEM_ACTOR,
+            if edit_item(cfg, repo, TEST_PROGRESS, item_id, {"traffic_light": word}, actor=SYSTEM_ACTOR,
                          reason=f"Calculated: {light.reason}", channel=CHANNEL_SYSTEM, now=now):
                 n += 1
         except EditError:                      # e.g. cell in an open conflict: the PMO decides first

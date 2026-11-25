@@ -2232,7 +2232,7 @@
     {
      "column": "Traffic Light",
      "type": "list",
-     "formula1": "\"Green,Amber,Red\"",
+     "formula1": "\"On track,At risk of delay,Delayed\"",
      "allow_blank": true
     }
    ],
@@ -2243,7 +2243,7 @@
      "type": "cellIs",
      "operator": "equal",
      "formula": [
-      "\"Amber\""
+      "\"At risk of delay\""
      ],
      "dxf": {
       "fill_fg": {
@@ -2264,7 +2264,7 @@
      "type": "cellIs",
      "operator": "equal",
      "formula": [
-      "\"Red\""
+      "\"Delayed\""
      ],
      "dxf": {
       "fill_fg": {
@@ -2285,7 +2285,7 @@
      "type": "cellIs",
      "operator": "equal",
      "formula": [
-      "\"Green\""
+      "\"On track\""
      ],
      "dxf": {
       "fill_fg": {
@@ -2412,7 +2412,7 @@
      ],
      [
       {
-       "value": "Green",
+       "value": "On track",
        "style": {
         "font": {
          "name": "Aptos Narrow",
@@ -2479,7 +2479,7 @@
      ],
      [
       {
-       "value": "Amber",
+       "value": "At risk of delay",
        "style": {
         "font": {
          "name": "Aptos Narrow",
@@ -2545,7 +2545,7 @@
      ],
      [
       {
-       "value": "Red",
+       "value": "Delayed",
        "style": {
         "font": {
          "name": "Aptos Narrow",

@@ -98,6 +98,9 @@ class WeeklyPreviewDialog(QDialog):
                (", ".join(to) if to else t("wk.to_pmo_only", p=ctx.cfg.alerts.pmo_email or t("wk.no_pmo"))))
         lay.addWidget(label(t("wk.recipients", n=len(to), w=who), wrap_text=True))
         lay.addWidget(label(_ai_line(r), "muted", wrap_text=True))
+        bad = weekly_report.preview_notes(r)                     # PMO matters not in the email (25-Nov-2026)
+        if bad:
+            lay.addWidget(label(t("wk.invalid", n=len(bad), w=", ".join(bad)), wrap_text=True))
         if note:
             lay.addWidget(label(note, wrap_text=True))
         self.view = QTextBrowser()

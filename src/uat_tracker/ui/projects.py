@@ -1,5 +1,6 @@
-"""Multi-project UI pieces: New project form, Import Excel, Relink, Clear project data (temporary), and the
-window shown when the user has no project yet."""
+"""Multi-project UI pieces: New project form, Import Excel, Relink, Clear project data (temporary), Delete an
+archived project for good (backup zip first, the Excel file is never touched), and the window shown when the
+user has no project yet."""
 
 from __future__ import annotations
 
@@ -212,6 +213,69 @@ class ClearProjectDialog(QDialog):
             from .worker import friendly
             error(self, friendly(exc))
         return run_in_worker(self, t("work.clearing"), job, done, failed, name="clear-project")
+
+
+class DeleteProjectDialog(QDialog):
+    """Delete an ARCHIVED project for good: what is deleted / not touched (the Excel file) / where the backup
+    goes; the project name must be typed to enable the red button. Runs in a worker with its own app.db."""
+
+    def __init__(self, base, person, project: dict, parent=None) -> None:
+        super().__init__(parent)
+        from ..services.delete_project import what_is_deleted
+        self.base, self.person, self.project, self.result = base, person, project, None
+        name = project["name"]
+        paths = what_is_deleted(base, project)
+        self.setWindowTitle(t("proj.delete_title", n=name))
+        self.setMinimumWidth(620)
+        outer = QVBoxLayout(self)
+        outer.addWidget(label(t("proj.delete_title", n=name), "h2"))
+        outer.addWidget(label(t("proj.delete_will"), "h2"))
+        outer.addWidget(label(t("proj.delete_list", p=paths["folder"]), wrap_text=True))
+        outer.addWidget(label(t("proj.delete_kept"), "h2"))
+        outer.addWidget(label(t("proj.delete_kept_list", p=paths["excel"]), wrap_text=True))
+        outer.addWidget(label(t("proj.delete_backup", p=paths["backup_dir"]), wrap_text=True))
+        outer.addWidget(label(t("proj.delete_type") + f":  {name}", "muted"))
+        self.typed = QLineEdit()
+        self.typed.setAccessibleName(t("proj.delete_type"))
+        self.typed.textChanged.connect(lambda s: self.go.setEnabled(s.strip() == name.strip()))
+        outer.addWidget(self.typed)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        c = button(t("cancel"))
+        c.clicked.connect(self.reject)
+        self.go = button(t("proj.delete_go"))
+        self.go.setStyleSheet(DANGER_QSS)
+        self.go.setEnabled(False)
+        self.go.clicked.connect(self._go)
+        row.addWidget(c)
+        row.addWidget(self.go)
+        outer.addLayout(row)
+
+    def _go(self):
+        from ..services.delete_project import delete_project
+        from .worker import friendly, run_in_worker
+        base, person, pid, typed = self.base, self.person, self.project["id"], self.typed.text()
+        self.go.setEnabled(False)
+
+        def job():                                   # app.db connection of this thread
+            db = projects.open_app_db(base)
+            try:
+                return delete_project(base, db, person, pid, typed_name=typed)
+            finally:
+                db.close()
+
+        def done(res):
+            self.result = res
+            text = t("proj.delete_done", p=res.backup_zip)
+            if res.leftover:
+                text += "\n" + t("proj.delete_left", p=res.leftover)
+            info(self, text)
+            self.accept()
+
+        def failed(exc):
+            self.go.setEnabled(True)
+            error(self, friendly(exc))
+        return run_in_worker(self, t("work.deleting"), job, done, failed, name="delete-project")
 
 
 class NoProjectWindow(QMainWindow):

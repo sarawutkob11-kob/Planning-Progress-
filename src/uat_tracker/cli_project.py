@@ -1,7 +1,9 @@
-"""Multi-project CLI: project list|create|import|relink|archive|unarchive|migrate|restore-clear.
+"""Multi-project CLI: project list|create|import|relink|archive|unarchive|delete|migrate|restore-clear.
 
-Project commands run as the profile saved on this PC by the app (create / import / relink / archive need an
-Admin or PMO of any project; anyone while there is no project yet)."""
+Project commands run as the profile saved on this PC by the app (create / import / relink / archive / delete
+need an Admin or PMO of any project; anyone while there is no project yet). delete removes an ARCHIVED project
+for good after a backup zip in <root>/delete-backups; the Excel file is never touched. Without
+--confirm-name "<project name>" it only shows what would be deleted (NOT DONE, exit 2)."""
 
 from __future__ import annotations
 
@@ -15,7 +17,8 @@ log = logging.getLogger(__name__)
 
 
 def add_parsers(sub) -> None:
-    p = sub.add_parser("project", help="projects: list, create, import, relink, archive, migrate, restore-clear")
+    p = sub.add_parser("project", help="projects: list, create, import, relink, archive, unarchive, delete, "
+                                       "migrate, restore-clear")
     ps = p.add_subparsers(dest="pcmd", required=True)
     ps.add_parser("list", help="all projects (also archived)")
     c = ps.add_parser("create", help="new project: new Excel file from the template")
@@ -29,6 +32,9 @@ def add_parsers(sub) -> None:
     for name in ("archive", "unarchive"):
         a = ps.add_parser(name)
         a.add_argument("project")
+    d = ps.add_parser("delete", help="delete an ARCHIVED project for good (backup zip first; Excel file not touched)")
+    d.add_argument("project")
+    d.add_argument("--confirm-name", default=None, help='the project name, typed exactly: --confirm-name "<name>"')
     m = ps.add_parser("migrate", help="one-time: old single-project data -> project 'RAMC UAT'")
     m.add_argument("--old-dir", default=None, help="default: %%LOCALAPPDATA%%\\UATTracker")
     m.add_argument("--name", default="RAMC UAT")
@@ -43,6 +49,24 @@ def person(base) -> projects.Person | None:
     if not d.get("email"):
         return None
     return projects.Person(d["email"], d.get("first_name") or "", d.get("last_name") or "")
+
+
+def _delete(base, appdb, who: projects.Person, proj: dict, confirm_name: str | None) -> int:
+    """Shows what would be deleted; deletes only with --confirm-name (ProjectError -> NOT DONE in handle())."""
+    from .services.delete_project import delete_project, what_is_deleted
+    paths = what_is_deleted(base, proj)
+    print(f"Project       : {proj['id']} '{proj['name']}'{' (archived)' if proj['archived'] else ''}")
+    print(f"Will delete   : the project in app.db + folder {paths['folder']}")
+    print(f"Not touched   : Excel file {paths['excel']}")
+    print(f"Backup zip in : {paths['backup_dir']}")
+    if confirm_name is None:
+        print(f'NOT DONE: type the project name: --confirm-name "{proj["name"]}"')
+        return 2
+    res = delete_project(base, appdb, who, proj["id"], typed_name=confirm_name)
+    print(f"Deleted {res.project_id} '{res.name}'. Backup: {res.backup_zip}")
+    if res.leftover:
+        print(f"Folder left, delete it yourself: {res.leftover}")
+    return 0
 
 
 def handle(base, args) -> int:
@@ -108,6 +132,8 @@ def handle(base, args) -> int:
             projects.set_archived(base, appdb, who, proj["id"], args.pcmd == "archive")
             print(f"{proj['name']}: {args.pcmd}d")
             return 0
+        if args.pcmd == "delete":
+            return _delete(base, appdb, who, proj, args.confirm_name)
         if args.pcmd == "restore-clear":
             from .services.clear_project import restore_backup
             cfg = projects.project_config(base, proj)

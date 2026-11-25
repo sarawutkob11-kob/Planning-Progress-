@@ -202,7 +202,15 @@ class SettingsScreen(Screen):
                 cl.addWidget(self.arch_table)
                 ub = button(t("proj.unarchive"))
                 ub.clicked.connect(self._unarchive)
-                cl.addWidget(ub)
+                from ..projects import DANGER_QSS
+                self.del_btn = button(t("proj.delete"))
+                self.del_btn.setStyleSheet(DANGER_QSS)
+                self.del_btn.clicked.connect(self._delete_archived)
+                row = QHBoxLayout()
+                row.addWidget(ub)
+                row.addWidget(self.del_btn)
+                row.addStretch(1)
+                cl.addLayout(row)
         return c
 
     def _relink(self):
@@ -234,6 +242,18 @@ class SettingsScreen(Screen):
             error(self, str(exc))
             return
         info(self, t("done"))
+        if app.win is not None:
+            app.win.retranslate()
+        self.ctx.refresh_all()
+
+    def _delete_archived(self) -> None:
+        row = self.arch_table.currentRow()
+        if row < 0:
+            return
+        from ..projects import DeleteProjectDialog
+        app = self.ctx.app
+        if not DeleteProjectDialog(app.base, app.person, self.arch_rows[row], self).exec():
+            return
         if app.win is not None:
             app.win.retranslate()
         self.ctx.refresh_all()

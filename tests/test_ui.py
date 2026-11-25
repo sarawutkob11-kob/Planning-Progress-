@@ -208,6 +208,20 @@ def test_uat_update_dialog_edits_every_field(win):
     assert win.ctx.repo.all_pending() == []
 
 
+def test_tp_update_dialog_edits_reporter(win):
+    svc = SyncService(win.ctx.cfg, win.ctx.repo, opener=OpenpyxlWorkbook, sender=FakeSender())
+    svc.init_ids()
+    dlg = UpdateDialog(win.ctx, "Test Progress", "TP-38")
+    assert "report_by" in dlg.inputs
+    dlg.inputs["report_by"].setPlainText("QA New Reporter")
+    assert dlg.save_btn.isEnabled()
+    dlg.on_save()
+    assert win.ctx.repo.get_item("Test Progress", "TP-38")["report_by"] == "QA New Reporter"
+    svc.flush(force=True)
+    from test_sync import cell
+    assert cell(win.ctx.cfg.excel_path, "Test Progress", "TP-38", "Report By") == "QA New Reporter"
+
+
 # --------------------------------------------------------------------------- Part 5 v2: profile + roles in the UI
 
 # Profile form + switch user: see test_projects.py (multi-project versions).
@@ -296,7 +310,7 @@ def test_weekly_report_button_preview_send_and_history(win, monkeypatch):
     r = win.ctx.repo.get_weekly(got[0])
     assert r["status"] == "preview" and r["ai_used"] == 0 and "No Claude API key" in r["ai_error"]
     dlg = wk.WeeklyPreviewDialog(win.ctx, got[0])
-    assert "DRY RUN" in texts(dlg) and "178 / 238" in dlg.view.toPlainText()
+    assert "DRY RUN" in texts(dlg) and "178 จาก 238 เคส" in dlg.view.toPlainText()   # 25-Nov-2026 layout
     dlg.on_send()
     assert win.ctx.repo.get_weekly(got[0])["status"] == "dry_run"
     g = W.generate(win.ctx.cfg, win.ctx.repo, actor=win.ctx.actor, as_of=_dt.date(2026, 11, 16), ai_func=fake_ai_ok)

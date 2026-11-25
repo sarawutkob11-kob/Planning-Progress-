@@ -5,10 +5,11 @@ Rules:
   Monday is a bank holiday. Once per week. PC/Outlook off -> skipped + logged, never backfilled.
   No holiday data for the year -> nothing sent, PMO warned (as Part 2).
 - Re-import Excel first. Numbers and tables are rendered by code; the AI writes only the summary part.
-- AI unavailable / refused / numbers not in the data -> the report goes out WITHOUT the AI part, with a note,
-  and the PMO is warned.
-- Recipients: every Report By Email + CC Email in Test Progress, deduped; invalid ones skipped + flagged.
-  None at all -> the PMO only, with a warning. Dry-run -> PMO only (outbox rules).
+- AI unavailable / refused / numbers not in the data -> the report goes out WITHOUT the AI part (no note in the
+  email, 25-Nov-2026) and the PMO is warned.
+- Recipients: every Report By Email + CC Email in Test Progress, deduped; invalid ones skipped + flagged and the
+  PMO is warned. None at all -> the PMO only, with a warning. Dry-run -> PMO only (outbox rules).
+  These PMO matters are never written in the email itself; the preview dialog shows them.
 - Manual: Dashboard "Generate Weekly Report" -> preview -> Send / Cancel (Admin, PMO, User BU/PM).
 - Every report is kept in weekly_report (content, recipients, AI on/off, tokens, cost, status).
 """
@@ -22,15 +23,16 @@ import re
 from dataclasses import dataclass
 
 from ..alerts.outbox import DRY, Outgoing, alert_pmo, deliver, mode_of
-from ..alerts.templates import _e, footer
+from ..alerts.templates import _e
 from ..domain.models import CHANNEL_APP, CHANNEL_SYSTEM
-from ..excel.sheets import TEST_PROGRESS
+from ..excel.sheets import SHEETS, TEST_PROGRESS
 from ..mail.sender import SendError
 from . import weekly_ai
 from .auth import WEEKLY, Actor, require, system_actor
 from .holidays import refresh_year
+from .traffic_light import AMBER, COMPLETE, GREEN, LABEL_EN, LABEL_TH, MISSING, RED
 from .importer import run_import
-from .weekly_data import build_data
+from .weekly_data import build_data, pct
 from .workdays import WorkCalendar
 
 log = logging.getLogger(__name__)
@@ -74,90 +76,283 @@ def recipients(repo, *, flag: bool = False, now: str | None = None) -> tuple[lis
 
 
 # --------------------------------------------------------------------------- HTML (code renders every number)
+# Approved layout 25-Nov-2026: Thai text, English only as a small grey line under each heading.
+# Email-safe HTML: tables + inline styles only (no flex / grid / <style>), 640 px wide.
 
-_TH_COLOR = {"Red": "แดง", "Amber": "เหลือง", "Green": "เขียว", "Complete": "เสร็จ", "Missing": "ข้อมูลไม่ครบ"}
-_KIND = {"overdue": ("เลยกำหนด", "Overdue"), "fail_rate": ("อัตรา fail", "Fail rate"), "time": ("ช้ากว่าเวลา", "Behind time")}
-_STYLE_CELL = "padding:4px 8px;border-bottom:1px solid #E3E7EE;vertical-align:top"
-
-
-def _h(th: str, en: str) -> str:
-    return (f'<h3 style="margin:18px 0 6px 0;color:#1F4FBF">{_e(th)} <span style="color:#666;font-weight:normal">'
-            f'/ {_e(en)}</span></h3>')
-
-
-def _table(headers: list[str], rows: list[list]) -> str:
-    if not rows:
-        return '<p style="color:#666">ไม่มีรายการ / None</p>'
-    head = "".join(f'<th style="{_STYLE_CELL};text-align:left;background:#F4F6F9">{_e(h)}</th>' for h in headers)
-    body = "".join("<tr>" + "".join(f'<td style="{_STYLE_CELL}">{_e("" if v is None else v)}</td>' for v in r)
-                   + "</tr>" for r in rows)
-    return f'<table style="border-collapse:collapse;margin:4px 0 8px 0">{head and "<tr>" + head + "</tr>"}{body}</table>'
+WIDTH = 640
+_FONT = "font-family:'IBM Plex Sans Thai',Tahoma,sans-serif"
+_INK, _MUTED, _LINE, _SOFT = "#14213D", "#6B7280", "#E5E7EB", "#F3F4F6"
+_HEX = {COMPLETE: "#2563EB", RED: "#DC2626", AMBER: "#F59E0B", GREEN: "#16A34A", MISSING: "#9CA3AF"}
+_TEXT_HEX = {**_HEX, AMBER: "#B45309"}                   # amber text is darker to stay readable
+_BAR_ORDER = (COMPLETE, RED, AMBER, GREEN, MISSING)
+_CODE_OF = {LABEL_EN[c]: c for c in LABEL_EN}            # the data carries the English label (weekly_data)
+_NONE = "ไม่มี"
 
 
-def _ai_html(ai: dict | None, note: str) -> str:
-    if not ai:
-        return (f'<div style="background:#FFF1D6;color:#7A4E00;padding:8px 12px;margin:8px 0">'
-                f'ไม่มีสรุปจาก AI ในรายงานนี้ / No AI summary in this report: {_e(note)}</div>')
-    def items(key, a, b):
-        li = "".join(f"<li><b>{_e(i.get(f'{a}_th'))}</b> — {_e(i.get(f'{b}_th'))}<br>"
-                     f'<span style="color:#444">{_e(i.get(f"{a}_en"))} — {_e(i.get(f"{b}_en"))}</span></li>'
-                     for i in ai.get(key, []))
-        return f"<ul>{li}</ul>" if li else '<p style="color:#666">-</p>'
-    return (_h("สรุปสำหรับผู้บริหาร (ร่างโดย AI)", "Executive summary (drafted by AI)")
-            + f"<p>{_e(ai.get('summary_th'))}</p><p style=\"color:#444\">{_e(ai.get('summary_en'))}</p>"
-            + _h("ความเสี่ยงหลัก", "Top risks") + items("risks", "title", "why")
-            + _h("สิ่งที่ควรติดตาม", "Suggested follow-ups") + items("follow_ups", "action", "why"))
+def _code(label_en: str) -> str:
+    return _CODE_OF.get(label_en, label_en)
 
 
-def render(data: dict, ai: dict | None, ai_note: str = "", extra_notes: list[str] = ()) -> tuple[str, str]:
+def _row(inner: str, pad: str = "16px 24px 0 24px") -> str:
+    return f'<tr><td style="padding:{pad}">{inner}</td></tr>'
+
+
+def _heading(th: str, en: str, *, inline: bool = False) -> str:
+    """Thai heading in bold; the English name as a small grey line under it (or after it, joined by ·)."""
+    en_html = f'<span style="font-size:12px;font-weight:normal;color:{_MUTED}">{_e(en)}</span>' if en else ""
+    if inline:
+        body = f'{_e(th)} <span style="font-size:12px;font-weight:normal;color:{_MUTED}">· {_e(en)}</span>'
+    else:
+        body = _e(th) + (f"<br>{en_html}" if en_html else "")
+    return (f'<div style="font-size:15px;font-weight:bold;color:{_INK};margin:0 0 8px 0;padding-top:8px;'
+            f'border-top:1px solid {_LINE}">{body}</div>')
+
+
+def _sub(th: str, en: str = "") -> str:
+    en_html = f' <span style="font-weight:normal;color:{_MUTED}">· {_e(en)}</span>' if en else ""
+    return f'<div style="font-size:13px;font-weight:bold;color:{_INK};margin:10px 0 4px 0">{_e(th)}{en_html}</div>'
+
+
+def _note(text: str) -> str:
+    return f'<div style="font-size:12px;color:{_MUTED};margin:6px 0 0 0">{_e(text)}</div>'
+
+
+def _empty() -> str:
+    return f'<div style="font-size:14px;color:{_MUTED}">{_NONE}</div>'
+
+
+def _dot(code: str | None) -> str:
+    if code is None:
+        return ""
+    return f'<span style="color:{_HEX.get(code, _MUTED)};font-size:14px">&#9679;</span>'
+
+
+def _badge(code: str) -> str:
+    c = _TEXT_HEX.get(code, _MUTED)
+    return (f'<span style="font-size:11px;color:{c};border:1px solid {c};padding:0 6px;'
+            f'white-space:nowrap">{_e(LABEL_TH.get(code, code))}</span>')
+
+
+def _list(rows: list[str]) -> str:
+    """Rows of a section: each row is '<tr>..</tr>' with a hairline under it."""
+    return f'<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">{"".join(rows)}</table>'
+
+
+def _item(left: str, main: str, right: str = "", *, right_color: str = _INK) -> str:
+    cell = f"padding:6px 0;border-bottom:1px solid {_LINE};vertical-align:top"
+    return (f'<tr><td width="18" style="{cell};width:18px">{left}</td><td style="{cell};font-size:14px">{main}</td>'
+            f'<td align="right" style="{cell};font-size:13px;white-space:nowrap;color:{right_color}">{right}</td></tr>')
+
+
+def _small(text: str) -> str:
+    return f'<br><span style="font-size:12px;color:{_MUTED}">{_e(text)}</span>'
+
+
+# ---- sections (each returns '<tr>..</tr>' rows of the 640 px table)
+
+def _header(data: dict) -> str:
+    return _row(
+        f'<div style="font-size:12px;color:{_MUTED}">Planning Progress</div>'
+        f'<div style="font-size:20px;font-weight:bold;color:{_INK};margin:2px 0 0 0">'
+        f'รายงาน UAT ประจำสัปดาห์ · {_e(data["project"])}</div>'
+        f'<div style="font-size:12px;color:{_MUTED}">Weekly UAT Report</div>'
+        f'<div style="font-size:13px;color:{_INK};margin:6px 0 0 0">ข้อมูล ณ {_e(data["as_of"])}</div>',
+        "24px 24px 0 24px")
+
+
+def _summary_line(data: dict) -> str:
+    c = data["overall"]["colors"]
+    parts = [f'<span style="color:{_TEXT_HEX[k]};font-weight:bold">{_e(LABEL_TH[k])} {c.get(LABEL_EN[k], 0)} แอป</span>'
+             for k in (RED, AMBER, MISSING)]
+    return _row(f'<div style="background:{_SOFT};padding:10px 14px;font-size:14px">{" · ".join(parts)}</div>')
+
+
+def _ai_block(ai: dict) -> str:
+    """AI text in Thai only (summary_th, title_th / why_th, action_th / why_th). English AI text is not shown."""
+    def items(key: str, head: str) -> str:
+        rows = [f'<li style="margin:0 0 4px 0"><b>{_e(i.get(f"{head}_th"))}</b>'
+                + (f": {_e(i.get('why_th'))}" if i.get("why_th") else "") + "</li>" for i in ai.get(key) or []]
+        return f'<ul style="margin:0 0 4px 0;padding-left:20px;font-size:14px">{"".join(rows)}</ul>' if rows else ""
+    risks, follow = items("risks", "title"), items("follow_ups", "action")
+    return _row(
+        _heading("สรุปสำหรับผู้บริหาร (ร่างโดย AI)", "Executive summary")
+        + f'<div style="font-size:14px;line-height:1.6">{_e(ai.get("summary_th"))}</div>'
+        + (_sub("ความเสี่ยงหลัก", "Top risks") + risks if risks else "")
+        + (_sub("สิ่งที่ควรติดตาม", "Suggested follow-ups") + follow if follow else ""))
+
+
+def _width(pct_text: str) -> str:
+    """'70.3%' -> '70.3%' kept between 0 and 100 for the bar."""
+    try:
+        v = float(pct_text.rstrip("%"))
+    except (AttributeError, ValueError):
+        v = 0.0
+    return f"{min(max(v, 0.0), 100.0):.1f}%"
+
+
+def _kpis(data: dict) -> str:
     o = data["overall"]
-    subject = f"[Planning Progress] รายงานประจำสัปดาห์ {data['project']} | Weekly Report - {data['as_of']}"
-    c = o["colors"]
-    notes = "".join(f'<div style="background:#FDE7E3;color:#A3260F;padding:8px 12px;margin:8px 0">{_e(n)}</div>'
-                    for n in extra_notes)
-    ra = [[a["app"], f"{_TH_COLOR.get(a['color'], a['color'])} ({a['color']})",
-           f"{_KIND[a['reason_kind']][0]} / {_KIND[a['reason_kind']][1]}", a["reason"],
-           f"{a['executed']}/{a['total_tc']}"] for a in data["red_amber"]]
-    od = ([["UAT Plan", t["id"], t["task"], t["finish_date"], t["days_late"]] for t in data["overdue"]["uat_plan"]]
-          + [["Test Progress", t["id"], t["app"], t["planned_finish"], t["days_late"]]
-             for t in data["overdue"]["test_progress"]])
+    box = f"padding:10px 12px;background:{_SOFT};vertical-align:top"
+    label_ = f"font-size:12px;color:{_MUTED}"
+    big = f"font-size:22px;font-weight:bold;color:{_INK}"
+    w = _width(o["pct_executed"])
+    bar = (f'<table width="100%" cellpadding="0" cellspacing="0" style="margin-top:6px;border-collapse:collapse">'
+           f'<tr><td style="background:{_HEX[COMPLETE]};width:{w};height:6px;font-size:0;line-height:0" width="{w}">'
+           f'&nbsp;</td><td style="background:{_LINE};height:6px;font-size:0;line-height:0">&nbsp;</td></tr></table>')
+
+    def cell(title: str, value, extra: str = "", width: str = "22%", color: str = _INK) -> str:
+        return (f'<td width="{width}" style="{box}"><div style="{label_}">{_e(title)}</div>'
+                f'<div style="{big};color:{color}">{_e(value)}</div>{extra}</td>')
+    gap = '<td width="8" style="width:8px">&nbsp;</td>'
+    first = cell("ทดสอบแล้ว", o["pct_executed"],
+                 f'<div style="font-size:12px;color:{_MUTED}">{o["executed"]} จาก {o["total_tc"]} เคส</div>{bar}', "34%")
+    return _row(f'<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse"><tr>'
+                + first + gap + cell("Pass", o["pass"], color=_HEX[GREEN]) + gap
+                + cell("Fail", o["fail"], color=_HEX[RED]) + gap
+                + cell("Defect ที่เปิดอยู่", data["defects"]["open"]) + "</tr></table>")
+
+
+def _status_bar(data: dict) -> str:
+    o = data["overall"]
+    c = {k: o["colors"].get(LABEL_EN[k], 0) for k in _BAR_ORDER}
+    total = sum(c.values())
+    segs = "".join(f'<td width="{pct(n, total)}" style="width:{pct(n, total)};background:{_HEX[k]};height:12px;'
+                   f'font-size:0;line-height:0">&nbsp;</td>' for k, n in c.items() if n)
+    bar = (f'<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:0 0 8px 0">'
+           f'<tr>{segs}</tr></table>') if segs else ""
+    legend = " &nbsp; ".join(f'<span style="white-space:nowrap">{_dot(k)} {_e(LABEL_TH[k])} <b>{n}</b></span>'
+                             for k, n in c.items())
+    return _row(_heading(f"สถานะแอป {o['apps']} แอป", "App status", inline=True) + bar
+                + f'<div style="font-size:13px;color:{_INK}">{legend}</div>')
+
+
+def _reason_th(a: dict, threshold: str) -> str:
+    """Thai one-line reason for one row of data['delayed_or_at_risk'] (R8)."""
+    kind, fail = a.get("reason_kind"), a.get("fail") or 0
+    fail_ok = f"มี Fail {fail} เคส ({a.get('pct_fail')}) แต่ยังไม่เกินเกณฑ์ {threshold}"
+    if kind == "overdue":
+        return f"เลยวันจบตามแผน ({a.get('planned_finish')}) มา {a.get('days_late')} วัน และยังไม่เสร็จ"
+    if kind == "fail_rate":
+        if _code(a.get("color")) == RED:
+            return f"Fail {a.get('pct_fail')} เกินเกณฑ์ {threshold}"
+        return fail_ok
+    behind = f"ทดสอบได้ {a.get('pct_exec')} แต่เวลาผ่านไปแล้ว {a.get('pct_time')}"
+    return f"{behind} · {fail_ok}" if fail >= 1 else behind
+
+
+def _watch_list(data: dict) -> str:
+    th = data.get("fail_threshold") or "-"
+    rows = [_item(_dot(_code(a["color"])), f"<b>{_e(a['app'])}</b> {_badge(_code(a['color']))}"
+                  + _small(_reason_th(a, th)), f"{a['executed']}/{a['total_tc']}")
+            for a in data["delayed_or_at_risk"]]
+    rows += [_item(_dot(MISSING), f"<b>{_e(m['app'])}</b> {_badge(MISSING)}"
+                   + _small("ยังไม่ได้กรอก " + ", ".join(m["fields"])), "-")
+             for m in data.get("missing_data", [])]
+    body = (_list(rows) + _note("ตัวเลขด้านขวาคือเคสที่ทดสอบแล้ว / ทั้งหมด")) if rows else _empty()
+    return _row(_heading("แอปที่ต้องติดตาม", "Apps to watch") + body)
+
+
+def _overdue_plan(data: dict) -> str:
+    rows = [_item("", f"<b>{_e(t['id'])}</b> {_e(t['task'])}" + _small(f"กำหนด {t['finish_date']}"),
+                  f"เลยมา {t['days_late']} วัน", right_color=_HEX[RED])
+            for t in data["overdue"]["uat_plan"]]
+    return _row(_heading("งาน UAT Plan ที่เลยกำหนด", "Overdue UAT Plan tasks") + (_list(rows) if rows else _empty()))
+
+
+def _defect_rows(items: list[dict], overdue: bool) -> str:
+    def one(x: dict) -> str:
+        meta = f"{x.get('status') or '-'} · เป้าหมาย {x['fix_target_date']}" if overdue else (x.get("status") or "-")
+        return _item("", f"<b>#{_e(x['id'])}</b> {_e(x.get('system'))} {_e(x.get('detail'))}" + _small(meta),
+                     f"เลยมา {x['days_late']} วัน" if overdue else "", right_color=_HEX[RED])
+    return _list([one(x) for x in items])
+
+
+def _defects(data: dict) -> str:
     d = data["defects"]
-    dov = [[x["id"], x["system"], x["detail"], x["fix_target_date"], x["days_late"]] for x in d["overdue"]]
-    dno = [[x["id"], x["system"], x["detail"], x["status"]] for x in d["no_target"]]
-    due = [[x["date"], x["page"], x["id"], x["name"]] for x in data["due_next_2_weeks"]]
-    rs = [[x["date"], x["page"], x["name"], f"{x['from']} → {x['to']}",
-           x["reason"] if x["where"] == "app" else "ไม่ระบุเหตุผล (แก้ใน Excel) / Not given (edited in Excel)"]
-          for x in data["reschedules_last_7_days"]]
-    w = data["reschedule_window"]
-    html = f"""<html><body style="font-family:'IBM Plex Sans Thai',Tahoma,sans-serif;font-size:14px;color:#14213D">
-<h2 style="margin:0 0 4px 0">รายงาน UAT ประจำสัปดาห์ {_e(data['project'])} / Weekly UAT Report</h2>
-<p style="color:#555;margin:0 0 8px 0">ข้อมูล ณ / Data as of {_e(data['as_of'])}</p>
-{notes}{_ai_html(ai, ai_note)}
-{_h("ภาพรวม", "Overview")}
-{_table(["", ""], [
-    ["ทดสอบแล้ว / Executed", f"{o['executed']} / {o['total_tc']} ({o['pct_executed']})"],
-    ["Pass", o["pass"]], ["Fail", o["fail"]],
-    ["แอป / Apps", f"{o['apps']}: เสร็จ/Complete {c.get('Complete', 0)} · แดง/Red {c.get('Red', 0)} · "
-                   f"เหลือง/Amber {c.get('Amber', 0)} · เขียว/Green {c.get('Green', 0)} · "
-                   f"ข้อมูลไม่ครบ/Missing {c.get('Missing', 0)}"]])}
-{_h("แอปสีแดง / เหลือง", "Red / Amber apps")}
-{_table(["แอป / App", "สี / Color", "สาเหตุ / Cause", "รายละเอียด / Detail", "Executed/Total"], ra)}
-{_h("งานเลยกำหนด", "Overdue tasks")}
-{_table(["หน้า / Page", "ID", "ชื่อ / Name", "กำหนด / Due", "เลยมา (วัน) / Days late"], od)}
-{_h("Defect", "Defects")}
-<p>เปิดอยู่ / Open: {d['open']} · เลยวันเป้าหมาย / Past fix target: {len(d['overdue'])} · ไม่มีวันเป้าหมาย / No fix target: {len(d['no_target'])}</p>
-{_table(["ID", "System", "รายละเอียด / Detail", "วันเป้าหมาย / Fix target", "เลยมา (วัน) / Days late"], dov) if dov else ""}
-{_table(["ID", "System", "รายละเอียด / Detail", "สถานะ / Status"], dno) if dno else ""}
-{_h("ครบกำหนดใน 2 สัปดาห์", "Due in the next 2 weeks")}
-{_table(["วันที่ / Date", "หน้า / Page", "ID", "ชื่อ / Name"], due)}
-{_h(f"การเลื่อนวัน {w['from']} – {w['to']}", f"Reschedules {w['from']} – {w['to']}")}
-{_table(["วันที่ / Date", "หน้า / Page", "ชื่อ / Name", "จาก → เป็น / From → To", "เหตุผล / Reason"], rs)}
-{_h("ข้อขัดแย้งและคิวตรวจ", "Conflicts and review queue")}
-<p>ข้อขัดแย้งที่ยังเปิด / Open conflicts: {data['open_conflicts']} · คิวตรวจของ PMO / PMO review queue: {data['review_queue']}</p>
-<p style="color:#777;font-size:12px">ตัวเลขและตารางทั้งหมดคำนวณโดยระบบ{' ส่วนสรุปร่างโดย AI (Claude)' if ai else ''} ·
-All numbers and tables are computed by the tracker{'; the summary is drafted by AI (Claude)' if ai else ''}.<br>{_e(footer())}</p>
-</body></html>"""
+    line = (f'<div style="font-size:14px">เปิดอยู่ <b>{d["open"]}</b> · เลยวันเป้าหมาย <b>{len(d["overdue"])}</b>'
+            f' · ไม่มีวันเป้าหมาย <b>{len(d["no_target"])}</b></div>')
+    parts = [_heading("Defect", ""), line]
+    if d["overdue"]:
+        parts += [_sub("เลยวันเป้าหมาย", "Past fix target"), _defect_rows(d["overdue"], True)]
+    if d["no_target"]:
+        parts += [_sub("ไม่มีวันเป้าหมาย", "No fix target"), _defect_rows(d["no_target"], False)]
+    return _row("".join(parts))
+
+
+def _due_week(data: dict) -> str:
+    due = data["due_next_7_days"]
+    watch = {a["id"]: _code(a["color"]) for a in data["delayed_or_at_risk"]}
+    watch.update({m["id"]: MISSING for m in data.get("missing_data", [])})
+    rows, last, dotted = [], None, False
+    for x in due:
+        if x["date"] != last:
+            last = x["date"]
+            rows.append(f'<tr><td colspan="3" style="padding:8px 0 2px 0;font-size:12px;font-weight:bold;'
+                        f'color:{_MUTED}">{_e(x["date"])}</td></tr>')
+        code = watch.get(x["id"]) if x["page"] == TEST_PROGRESS else None
+        dotted = dotted or code is not None
+        page = (f'<span style="font-size:11px;color:{_MUTED};border:1px solid {_LINE};padding:0 6px;'
+                f'white-space:nowrap">{_e(x["page"])}</span>')
+        rows.append(_item(_dot(code), f"{page} <b>{_e(x['id'])}</b> {_e(x['name'])}"))
+    body = _empty() if not rows else _list(rows) + (_note("จุดสีหน้าชื่อคือแอปที่อยู่ในรายการต้องติดตาม")
+                                                       if dotted else "")
+    return _row(_heading(f"ครบกำหนดใน 1 สัปดาห์ ({len(due)} งาน)", "Due within 1 week") + body)
+
+
+def _field_name(page: str, key: str) -> str:
+    sheet = SHEETS.get(page)
+    spec = next((f for f in sheet.fields if f.key == key), None) if sheet else None
+    return spec.names[0] if spec else key
+
+
+def _other(data: dict) -> str:
+    w, rs = data["reschedule_window"], data["reschedules_last_7_days"]
+    title = f"การเลื่อนวัน {w['from']} ถึง {w['to']}"
+    if rs:
+        rows = [_item("", f"<b>{_e(x['name'])}</b> {_e(_field_name(x['page'], x['field']))} {_e(x['from'])} → "
+                          f"{_e(x['to'])}" + _small(f"{x['date']} · {x['page']} · "
+                                                    + (f"เหตุผล: {x['reason']}" if x["where"] == "app" and x["reason"]
+                                                       else "แก้ใน Excel ไม่ได้ระบุเหตุผล")))
+                for x in rs]
+        resched = _sub(title, "Reschedules") + _list(rows)
+    else:
+        resched = _sub(f"{title}: {_NONE}", "Reschedules")
+    return _row(_heading("อื่น ๆ", "Other") + resched
+                + f'<div style="font-size:14px;margin:10px 0 0 0">ข้อขัดแย้งที่ยังเปิด: <b>{data["open_conflicts"]}</b></div>')
+
+
+def _footer(data: dict, ai: dict | None) -> str:
+    text = f"ตัวเลขทั้งหมดคำนวณโดยระบบ Planning Progress ของ PMO ({data['project']}) และส่งอัตโนมัติ"
+    if ai:
+        text += " · ส่วนสรุปร่างโดย AI (Claude)"
+    return _row(f'<div style="font-size:11px;color:{_MUTED};border-top:1px solid {_LINE};padding-top:10px">'
+                f'{_e(text)}</div>', "20px 24px 24px 24px")
+
+
+def render(data: dict, ai: dict | None) -> tuple[str, str]:
+    """(subject, html). Lays out numbers from build_data only; no calculation here.
+
+    `ai` is the AI content when the AI part succeeded, else None (no AI section, no note: R13)."""
+    subject = f"[Planning Progress] รายงาน UAT ประจำสัปดาห์ {data['project']} · {data['as_of']}"
+    sections = [_header(data), _summary_line(data), _ai_block(ai) if ai else "", _kpis(data), _status_bar(data),
+                _watch_list(data), _overdue_plan(data), _defects(data), _due_week(data), _other(data),
+                _footer(data, ai)]
+    html = (f'<html><body style="margin:0;padding:0;background:{_SOFT}">\n'      # dry-run banner goes after it
+            f'<table width="100%" cellpadding="0" cellspacing="0" style="background:{_SOFT}"><tr>'
+            f'<td align="center" style="padding:16px 0">'
+            f'<table width="{WIDTH}" cellpadding="0" cellspacing="0" style="width:{WIDTH}px;background:#FFFFFF;'
+            f'{_FONT};font-size:14px;color:{_INK};text-align:left">'
+            + "".join(sections) + "</table></td></tr></table></body></html>")
     return subject, html
+
+
+def preview_notes(r: dict) -> list[str]:
+    """Lines for the preview dialog: invalid recipients (from r['invalid_recipients']), one per address."""
+    try:
+        bad = json.loads(r.get("invalid_recipients") or "[]")
+    except (TypeError, ValueError):
+        return []
+    return [f"{b.get('app') or b.get('id')} ({b.get('value')})" for b in bad]
 
 
 # --------------------------------------------------------------------------- generate / send
@@ -189,14 +384,7 @@ def generate(cfg, repo, *, actor: Actor, as_of: dt.date, trigger: str = "manual"
     to, bad = recipients(repo, flag=True, now=now)
     ai = weekly_ai.AiResult(False, error="AI turned off for this run") if not use_ai else \
         (ai_func or _summarize(cfg))(data, model=weekly_ai.model_of(repo, cfg))
-    notes = []
-    if not to:
-        notes.append("ไม่มีผู้รับใน Report By Email / CC Email: ส่งให้ PMO เท่านั้น · "
-                     "No Report By Email / CC Email addresses: sent to the PMO only.")
-    if bad:
-        notes.append(f"ข้ามอีเมลที่ไม่ถูกต้อง {len(bad)} รายการ · Skipped {len(bad)} invalid address(es): "
-                     + ", ".join(f"{b['app']} ({b['value']})" for b in bad[:10]))
-    subject, html = render(data, ai.content if ai.ok else None, ai.error, notes)
+    subject, html = render(data, ai.content if ai.ok else None)       # PMO matters stay out of the email (R13)
     with repo.transaction():
         rid = repo.insert_weekly({
             "created_at": now, "as_of": as_of.isoformat(), "trigger": trigger, "created_by": actor.editor,
@@ -312,8 +500,19 @@ def run_weekly(cfg, repo, sender, *, clock: dt.datetime | None = None, scheduled
         alert_pmo(cfg, repo, sender, "Weekly report: no recipients",
                   "Test Progress has no Report By Email / CC Email addresses, so the weekly report went to the "
                   "PMO only.", send_date=iso, now=now, editor=EDITOR)
+    if g.invalid:
+        alert_pmo(cfg, repo, sender, "Weekly report: invalid email addresses skipped", _invalid_detail(g),
+                  send_date=iso, now=now, editor=EDITOR)
     ok = result in ("sent", "dry_run")
     return record("ok" if ok else "failed", f"WR-{g.report_id}: {result}", g.report_id, result)
+
+
+def _invalid_detail(g: Generated, limit: int = 10) -> str:
+    """Count and list of the skipped addresses (as the note that used to be in the email)."""
+    shown = ", ".join(f"{b['app']} ({b['value']})" for b in g.invalid[:limit])
+    more = f" and {len(g.invalid) - limit} more" if len(g.invalid) > limit else ""
+    return (f"Report WR-{g.report_id}: skipped {len(g.invalid)} invalid address(es) in Report By Email / CC Email: "
+            f"{shown}{more}. Fix them in Test Progress.")
 
 
 def cal_years_ok(repo, cfg, day: dt.date, now: str, fetcher=None) -> bool:

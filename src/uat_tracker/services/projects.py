@@ -11,7 +11,9 @@
   archived one) already uses that file name -> blocked.
 - Who may create / import / relink / archive and change shared settings: Admin or PMO in any project; anyone
   while there is no project yet. The creator becomes the new project's Admin.
-- Archive only (hidden, data kept, can be undone). No delete.
+- Archive (hidden, data kept, can be undone). An ARCHIVED project can be deleted for good (approved
+  25-Nov-2026, services/delete_project.py): Admin/PMO, project name typed, backup zip in <root>/delete-backups
+  first; the Excel file is never touched.
 - Relink: the new file needs the 3 sheets + required headers, and >= 80% of the project's App IDs.
 """
 

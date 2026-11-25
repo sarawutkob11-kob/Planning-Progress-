@@ -94,7 +94,7 @@ def test_numbers_match_database(wcfg, data):
     assert o["pct_executed"] == f"{178 / 238 * 100:.1f}%"
     assert o["pass"] == sum(int(r["pass_count"] or 0) for r in tp) and o["fail"] == 2
     colors = [compute(r, MON, wcfg.alerts.fail_threshold).color for r in tp]
-    assert len(d["red_amber"]) == sum(c in ("Red", "Amber") for c in colors)
+    assert len(d["delayed_or_at_risk"]) == sum(c in ("Red", "Amber") for c in colors)
     assert sum(o["colors"].values()) == o["apps"] == len(tp)
     dash = dashboard_build(wcfg, repo, MON)
     assert len(d["overdue"]["uat_plan"]) == dash.overdue_tasks
@@ -115,6 +115,90 @@ def test_reschedules_last_7_days_with_reason(wcfg, data):
     rs = build_data(wcfg, repo, MON)["reschedules_last_7_days"]
     assert [(x["id"], x["from"], x["to"], x["where"]) for x in rs] == [("TP-38", "13-Nov-2026", "20-Nov-2026", "app")]
     assert "Waiting data" in rs[0]["reason"] and "Waiting other system data" in rs[0]["reason"]
+
+
+# --------------------------------------------------------------------------- T16: report data (2026-11-25)
+
+T16_NOW = "2026-11-15T00:00:00+07:00"
+
+
+def _open_ids(repo, sheet: str, n: int) -> list[str]:
+    ids = sorted(i for i, r in repo.load_items(sheet).items() if r.get("active") and r.get("status") != "Complete")
+    assert len(ids) >= n
+    return ids[:n]
+
+
+def _set(repo, sheet: str, item_id: str, **fields) -> None:
+    with repo.transaction():
+        for k, v in fields.items():
+            repo.set_field(sheet, item_id, k, v, T16_NOW)
+
+
+def test_t16_due_window_is_7_days(wcfg, data):          # AC-14
+    repo = data
+    on7, on8 = _open_ids(repo, UAT_PLAN, 2)
+    _set(repo, UAT_PLAN, on7, finish_date=(MON + dt.timedelta(days=7)).isoformat())
+    _set(repo, UAT_PLAN, on8, finish_date=(MON + dt.timedelta(days=8)).isoformat())
+    tp7, tp8 = _open_ids(repo, TEST_PROGRESS, 2)
+    _set(repo, TEST_PROGRESS, tp7, planned_finish=(MON + dt.timedelta(days=7)).isoformat())
+    _set(repo, TEST_PROGRESS, tp8, planned_finish=(MON + dt.timedelta(days=8)).isoformat())
+    d = build_data(wcfg, repo, MON)
+    assert "due_next_2_weeks" not in d
+    due = {(x["page"], x["id"]) for x in d["due_next_7_days"]}
+    assert ("UAT Plan", on7) in due and ("Test Progress", tp7) in due
+    assert ("UAT Plan", on8) not in due and ("Test Progress", tp8) not in due
+    window = {(MON + dt.timedelta(days=i)).strftime("%d-%b-%Y") for i in range(8)}
+    assert {x["date"] for x in d["due_next_7_days"]} <= window
+    wide = build_data(wcfg, repo, MON, days_ahead=8)["due_next_7_days"]
+    assert ("UAT Plan", on8) in {(x["page"], x["id"]) for x in wide}
+
+
+def test_t16_days_late_in_delayed_or_at_risk(wcfg, data):        # AC-11 (data part)
+    repo = data
+    late = _open_ids(repo, TEST_PROGRESS, 1)[0]
+    _set(repo, TEST_PROGRESS, late, total_tc=10, executed=2, fail_count=0,
+         planned_start=(MON - dt.timedelta(days=20)).isoformat(),
+         planned_finish=(MON - dt.timedelta(days=3)).isoformat())
+    d = build_data(wcfg, repo, MON)
+    row = next(a for a in d["delayed_or_at_risk"] if a["id"] == late)
+    assert row["reason_kind"] == "overdue" and row["days_late"] == 3
+    assert row["planned_finish"] == (MON - dt.timedelta(days=3)).strftime("%d-%b-%Y")
+    tp_late = {t["id"]: t["days_late"] for t in d["overdue"]["test_progress"]}
+    assert tp_late[late] == row["days_late"]                              # same number as the overdue list
+    for a in d["delayed_or_at_risk"]:
+        assert "days_late" in a
+        if a["reason_kind"] != "overdue":
+            assert a["days_late"] is None
+
+
+def test_t16_missing_data_list(wcfg, data):                      # AC-10 (data part)
+    repo = data
+    no_tc, no_dates = _open_ids(repo, TEST_PROGRESS, 2)
+    _set(repo, TEST_PROGRESS, no_tc, total_tc=None)
+    _set(repo, TEST_PROGRESS, no_dates, total_tc=0, planned_start=None, planned_finish=None)
+    d = build_data(wcfg, repo, MON)
+    md = {m["id"]: m for m in d["missing_data"]}
+    assert md[no_tc]["fields"] == ["Total TC"]
+    assert md[no_dates]["fields"] == ["Total TC", "Planned Start", "Planned Finish"]
+    assert set(md[no_tc]) == {"id", "app", "fields"} and md[no_tc]["app"]
+    assert len(d["missing_data"]) == d["overall"]["colors"]["Missing data"]          # same as the status bar
+    late_ids = {a["id"] for a in d["delayed_or_at_risk"]}
+    assert not late_ids & set(md)
+    assert "review_queue" in d                                                       # kept in data
+
+
+def test_t16_missing_fields_and_reason_unchanged():
+    from uat_tracker.services.traffic_light import MISSING, missing_fields
+    assert missing_fields({}) == ["Total TC", "Planned Start", "Planned Finish"]
+    assert missing_fields({"total_tc": 0, "planned_start": "2026-11-01", "planned_finish": ""}) == \
+        ["Total TC", "Planned Finish"]
+    assert missing_fields({"total_tc": 5, "planned_start": "2026-11-01", "planned_finish": "2026-11-30"}) == []
+    light = compute({"total_tc": None, "planned_start": "2026-11-01"}, MON, 0.1)
+    assert light.color == MISSING and light.reason == "Missing data: Total TC, Planned Finish"
+    assert compute({"status": "Complete"}, MON, 0.1).reason == "Status is Complete"
+    ok = compute({"total_tc": 10, "executed": 5, "fail_count": 0, "planned_start": "2026-11-01",
+                  "planned_finish": "2026-11-30"}, MON, 0.1)
+    assert ok.color == "Amber" and ok.reason == "%Exec 50.0% < %Time 51.7%"
 
 
 # --------------------------------------------------------------------------- 3: recipients
@@ -218,7 +302,7 @@ def test_monday_workday_sent_dry_run_to_pmo_only(wcfg, data):
     assert "qa@example.test" in s.sent[0].html                                   # real To shown in the banner only
     w = repo.get_weekly(r.report_id)
     assert w["status"] == "dry_run" and w["ai_used"] == 1 and w["trigger"] == "scheduled"
-    assert "178 / 238 (74.8%)" in w["html"]
+    assert "74.8%" in w["html"] and "178 จาก 238 เคส" in w["html"]                 # 25-Nov-2026 layout
     assert run(wcfg, repo, s, MON + dt.timedelta(days=1)).message == "Weekly report already sent this week"
 
 
@@ -257,7 +341,8 @@ def test_api_down_report_sent_without_ai(wcfg, data):
     r = run(wcfg, data, s, MON, ai_func=fake_ai_down)
     w = data.get_weekly(r.report_id)
     assert r.send_result == "dry_run" and w["ai_used"] == 0 and "connection refused" in w["ai_error"]
-    assert "No AI summary" in w["html"] and "178 / 238" in w["html"]
+    assert "178 จาก 238 เคส" in w["html"] and "สรุปสำหรับผู้บริหาร" not in w["html"]
+    assert "No AI summary" not in w["html"] and "ไม่มีสรุปจาก AI" not in w["html"]      # R13: PMO told separately
     assert any("without the AI summary" in m.subject for m in s.sent)
 
 

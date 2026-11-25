@@ -9,14 +9,15 @@ import html
 from string import Template
 
 from ..parsing.dates import fmt
+from ..services.traffic_light import AMBER, COMPLETE, GREEN, LABEL_EN, LABEL_TH, RED, label
 from .rules import DAILY, R1, R2, R3, R4A, R4B, TODAY, Alert
 
 COLOR_STYLE = {   # spec §9.1
     "Red": ("#A3260F", "#FDE7E3"), "Amber": ("#7A4E00", "#FFF1D6"),
     "Green": ("#1E6B3E", "#E3F2E8"), "Complete": ("#1E6B3E", "#E3F2E8"),
 }
-COLOR_TH = {"Red": "แดง (Red)", "Amber": "เหลือง (Amber)", "Green": "เขียว (Green)",
-            "Complete": "เสร็จ (Complete)"}
+# Keys are internal color codes; values are the words users see (e.g. "ล่าช้า (Delayed)").
+COLOR_TH = {c: f"{LABEL_TH[c]} ({LABEL_EN[c]})" for c in (RED, AMBER, GREEN, COMPLETE)}
 
 SUBJECTS = {
     (R1, TODAY): Template("[UAT] $app: testing starts today ($date)"),
@@ -117,7 +118,7 @@ def _color_badge(color: str | None) -> str:
         return "-"
     fg, bg = COLOR_STYLE.get(color, ("#333", "#eee"))
     return (f'<span style="color:{fg};background:{bg};padding:2px 8px;border-radius:10px;'
-            f'font-weight:600">{_e(color)}</span>')
+            f'font-weight:600">{_e(label(color))}</span>')
 
 
 def fact_rows(rec: dict, light=None) -> list[tuple[str, str]]:
@@ -165,7 +166,7 @@ def render(alert: Alert, rec: dict, light=None) -> tuple[str, str]:
     vars_ = {
         "app": rec.get("application") or alert.item_id,
         "date": fmt(alert.trigger) if alert.trigger else "",
-        "color": color, "color_th": COLOR_TH.get(color, color),
+        "color": label(color), "color_th": COLOR_TH.get(color, label(color)),
     }
     subject = SUBJECTS[key].substitute(vars_)
     msg_th, msg_en, act_th, act_en = (Template(s).substitute(vars_) for s in BODIES[key])

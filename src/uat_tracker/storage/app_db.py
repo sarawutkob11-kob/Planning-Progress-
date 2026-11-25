@@ -61,8 +61,16 @@ class AppDb:
             (p for p in self.projects(True) if p["name"].casefold() == (key or "").strip().casefold()), None)
 
     def next_project_id(self) -> str:
-        n = [int(r[0][1:]) for r in self.conn.execute("SELECT id FROM project") if r[0][1:].isdigit()]
+        """p001, p002 ... one more than the highest id ever used (project table + project_event),
+        so the id of a deleted project is never given to a new one."""
+        rows = self.conn.execute("SELECT id FROM project UNION"
+                                 " SELECT project_id FROM project_event WHERE project_id IS NOT NULL")
+        n = [int(r[0][1:]) for r in rows if r[0][1:].isdigit()]
         return f"p{max(n, default=0) + 1:03d}"
+
+    def delete_project(self, project_id: str) -> None:
+        """DELETE FROM project WHERE id=?. Caller wraps in transaction(); the trigger aborts unarchived rows."""
+        self.conn.execute("DELETE FROM project WHERE id=?", (project_id,))
 
     def insert_project(self, row: dict) -> None:
         cols = [c for c in PROJECT_COLS if c in row]

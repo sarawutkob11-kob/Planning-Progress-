@@ -90,12 +90,12 @@ Only **Test Progress** drives automatic emails. The job re-imports Excel before 
 
 | Topic | Behaviour |
 |---|---|
-| Traffic Light | First match wins: Status Complete → Complete; past Planned Finish or %Fail > X → Red; %Exec < %Time or (#Fail ≥ 1 and %Fail ≤ X) → Amber; else Green. X = `fail_threshold` (5%). %Time uses calendar days; Planned Start = Planned Finish → %Time 1 from that day. Blank #Fail and blank Executed = 0. Total TC blank/0 or a planned date blank (or waiting in review) → no color, flag `missing_data`. |
+| Traffic Light | First match wins: Status Complete → Complete; past Planned Finish or %Fail > X → Delayed; %Exec < %Time or (#Fail ≥ 1 and %Fail ≤ X) → At risk of delay; else On track. X = `fail_threshold` (5%). Thai: ล่าช้า / มีความเสี่ยงล่าช้า / ตามแผน. The app, emails, weekly report and the Excel Traffic Light column all show these words (the database keeps the internal codes Red / Amber / Green; a file that still has the old words is rewritten by the daily job). %Time uses calendar days; Planned Start = Planned Finish → %Time 1 from that day. Blank #Fail and blank Executed = 0. Total TC blank/0 or a planned date blank (or waiting in review) → no color, flag `missing_data`. |
 | Color history | A row in `traffic_light_history` + an audit entry (channel `system`) only when the color changes. The Excel Traffic Light column is not changed (write-back is Part 3). |
 | Workdays | Mon–Fri minus cached holidays. A trigger date on a non-workday moves to the previous workday. |
 | R1 Planned Start | On the start day: one "starts today" email. From the next workday, daily while Actual Start is empty. |
 | R2 Planned Finish | On the finish day: one reminder (not sent if Actual Finish is already filled). From the next workday, daily while Actual Finish is empty. Actual Finish > Planned Finish → flag `actual_finish_late`. |
-| R3 color change | One email on a change into Amber/Red (first color, Green→Amber/Red, Amber→Red, re-entry after Green). **Red→Amber: no email.** A data gap (no color) in between does not count as a change. A failed send is retried next day while the color holds. |
+| R3 color change | One email on a change into At risk of delay/Delayed (first status, On track→At risk of delay/Delayed, At risk of delay→Delayed, re-entry after On track). **Delayed→At risk of delay: no email.** A data gap (no color) in between does not count as a change. A failed send is retried next day while the color holds. |
 | R4 close-out | Executed = Total TC and Actual Finish filled (also when later than Planned Finish). R4A: daily "set Status to Complete" (the app never changes Status). R4B: daily "upload results" until TC/Result Complete is Complete or a file is uploaded. |
 | Status Complete | Stops every rule for that item. |
 | Recipients | To = Report By Email; CC = CC Email. Empty Report By Email → not sent, logged as skipped, flagged. |
@@ -164,7 +164,7 @@ Open it with the **Planning Progress** shortcut on the Desktop, or from a termin
 
 | Screen | What it does |
 |---|---|
-| Dashboard | 4 KPI cards, follow-up list (Overdue / Today / No target / Red / Amber / Missing data) with **Send reminder** for UAT Plan and Defect items, incomplete apps, due within 2 weeks, missing Report By Email warning. "Generate Weekly Report" is disabled until Part 6. |
+| Dashboard | 4 KPI cards, follow-up list (Overdue / Today / No target / Delayed / At risk of delay / Missing data) with **Send reminder** for UAT Plan and Defect items, incomplete apps, due within 2 weeks, missing Report By Email warning. "Generate Weekly Report" is disabled until Part 6. |
 | UAT Plan | Import from Excel, + Add task (the row is inserted after the last task of its group), filter chips, owner filter, groups A–E (fully complete groups collapsed), detail panel with linked Test Progress, reschedule timeline, linked defects, edit history, Update. |
 | Update dialog | Status, dates (picker only), remark; a moved planned date shows "moved A → B (reschedule #N)" and needs a reason + root cause; Test Progress: Complete needs Actual Finish, Actual Finish after Planned Finish is blocked. |
 | Test Progress | Summary, filters, progress bars, Pass+Fail mismatch tag, "Not filled" Actual Finish, calculated Traffic Light; Update results (numbers, dates, Report By Email, CC Email); Upload result file. |
@@ -231,12 +231,12 @@ Every Monday at 09:00 the app sends a weekly UAT report. The tracker computes ev
 | Topic | Behaviour |
 |---|---|
 | Day | Monday 09:00. Monday is a bank holiday → the first workday of that week. Once per week. PC or Outlook off → skipped and logged, never sent later. No holiday data for the year → not sent, PMO warned. |
-| Data | Excel is re-read first. Overall Executed/Total %, Pass, Fail; Red/Amber apps with the reason (overdue / fail rate / behind time); overdue UAT Plan tasks and Test Progress apps; open defects, past fix target, no fix target; due in the next 2 weeks; reschedules in the last 7 days (reason when changed in the app, "not given" when changed in Excel); open conflicts and review-queue count. Same definitions as the Dashboard. |
+| Data | Excel is re-read first. Overall Executed/Total %, Pass, Fail; Delayed / At risk of delay apps with the reason (overdue with days late / fail rate / behind time); apps with missing data and which fields are blank (Total TC, Planned Start, Planned Finish); overdue UAT Plan tasks and Test Progress apps; open defects, past fix target, no fix target; due in the next 7 days; reschedules in the last 7 days (reason when changed in the app, "not given" when changed in Excel); open conflicts and review-queue count. Same definitions as the Dashboard. |
 | AI | Model from Settings, effort medium, JSON schema output, refusal fallback `"default"` (Opus / Sonnet / Fable models). Timeout 60 s, 2 retries. Only the computed data is sent: no people, emails, files or paths. |
 | Number check | Every number in the AI text must appear in the data sent. Otherwise the AI part is dropped. Names under "related" that aren't in the data are removed. |
-| AI unavailable | No key, API down, refusal, cut-off, bad JSON or an unknown number → the report goes out **without** the AI part (with a note), and the PMO is warned. |
-| Recipients | All Report By Email + CC Email in Test Progress, deduped. Invalid addresses are skipped and flagged (`invalid_report_email`). None at all → the PMO only, plus a warning. Dry-run → the PMO only (the real To is shown in the banner). |
-| Format | One HTML email, Thai first then English, no attachment. Tables and numbers rendered by code. |
+| AI unavailable | No key, API down, refusal, cut-off, bad JSON or an unknown number → the report goes out **without** the AI part (no note in the email), and the PMO is warned separately. The preview window shows why. |
+| Recipients | All Report By Email + CC Email in Test Progress, deduped. Invalid addresses are skipped and flagged (`invalid_report_email`); the automatic run warns the PMO (count + list) and the preview window lists them. None at all → the PMO only, plus a warning. Dry-run → the PMO only (the real To is shown in the banner). None of these PMO matters (AI, recipients, review queue) is written in the email. |
+| Format | One HTML email (layout approved 25-Nov-2026), no attachment, 640 px, tables + inline styles only so Outlook shows it. Subject `[Planning Progress] รายงาน UAT ประจำสัปดาห์ <project> · <date>`. Content in Thai; English only as a small grey line under each heading. Order: summary line (Delayed / At risk of delay / Missing data counts), AI summary in Thai (when available), key numbers, app status bar, apps to watch with a Thai reason, overdue UAT Plan tasks, defects, due within 1 week, reschedules and open conflicts. Numbers rendered by code. |
 | Kept | `weekly_report` table: date, automatic/manual, who, recipients, invalid addresses, HTML, data, AI on/off, model, tokens, cost (USD), status (preview / sent / dry_run / failed / skipped / cancelled). Also in the email log and the audit log. |
 | Cost | About 9,000 input + 1,500-2,500 output tokens per run: ≈ US$0.07 with `claude-opus-5-5` ($4 / $20 per million tokens). Logged per run. |
 
@@ -252,6 +252,7 @@ The app is called **Planning Progress** everywhere (window, shortcut, scheduled 
   profile.json        who uses this PC (email, name, last project)
   projects\p001\      tracker.db + attachments, backups, snapshots, previews of ONE project
   clear-project.log   "Clear project data" log;  clear-backups\  zip made before each clear
+  delete-backups\     <id>_<yyyymmdd-HHMMSS>.zip made before a project is deleted (never deleted automatically)
   migration-backup\   backups taken by the one-time migration
   logs\app.log        the app and CLI commands (errors with full details)
   logs\jobs.log       scheduled runs (daily alerts, weekly report: --scheduled)
@@ -265,7 +266,7 @@ the app closed (or use the backups the app makes); copying `tracker.db` alone wh
 changes.
 
 **Long actions** (Import from Excel, re-reading Excel after a conflict decision, restoring a workbook backup,
-Relink, Clear project data) run in the background behind a "please wait" box; the window stays responsive. If
+Relink, Clear project data, Delete project) run in the background behind a "please wait" box; the window stays responsive. If
 the sync is writing the workbook at that moment: "Sync running, try again in a moment".
 
 **Excel busy** (a cell being edited, a dialog open in Excel): each Excel call is retried for up to ~30 s
@@ -288,8 +289,20 @@ PMO email, Outlook account, language.
   the last application with the `%Progress` formula. Rows are written to that project's file only.
 - **New email** in the profile form: QA in each project whose Test Progress lists it (Report By Email / CC Email);
   otherwise "ask the Admin".
-- **Settings**: Project card (file + Relink, date window, Archive, archived list), "This project only",
-  "Shared" (Admin / PMO), Apply to Windows scheduler (one task pair per project, `--project <id>`).
+- **Settings**: Project card (file + Relink, date window, Archive, archived list with Restore selected and
+  Delete selected permanently), "This project only", "Shared" (Admin / PMO), Apply to Windows scheduler (one
+  task pair per project, `--project <id>`).
+- **Delete a project** (approved 25-Nov-2026, `services/delete_project.py`): only an **archived** project, only
+  Admin / PMO (of any project), and the project name must be typed. A backup zip is made first in
+  `delete-backups\` (`tracker.db`, every other file of the project folder, `manifest.json` with the project
+  row). Then the project leaves `app.db` and its folder `projects\<id>\` is removed. **The Excel file is never
+  touched** (not opened, moved or deleted), so it can be imported again as a new project. Kept: the project's
+  history in `app.db` (plus a "deleted" entry), `logs\`, `clear-backups\`, other projects, shared settings.
+  A deleted project's id is never given to a new project. If files of the project are in use (another app
+  window, Explorer, OneDrive) nothing is deleted: close them and try again. If only some files could not be
+  removed at the end, the project is deleted and the folder left (`projects\.deleting-<id>-<stamp>`) is shown:
+  delete it yourself later. There is no restore screen: the zip can be put back by hand if really needed.
+  When every project is archived, use `.\run.ps1 project delete` instead.
 - **File moved / renamed outside the app**: banner + **Relink** (the new file needs the 3 sheets and >= 80 % of
   the project's App IDs).
 - **Danger zone → Clear project data** (TEMPORARY, Admin / PMO): see `services/clear_project.py`. **Off by
@@ -309,7 +322,7 @@ the names if lines moved):
 | `src/uat_tracker/services/clear_project.py` | the whole file |
 | `src/uat_tracker/services/projects.py` | lines 112-113 (`warn_if_live` import + call in `open_project`) |
 | `src/uat_tracker/ui/screens/settings.py` | `clear_project` in the import on line 15; lines 56-57 (live warning); lines 164-165 (danger zone); methods `_live_warning` (line 242) and `_danger_zone` (line 248, up to `_browse`) |
-| `src/uat_tracker/ui/projects.py` | `DANGER_QSS` (line 20) and class `ClearProjectDialog` (line 163, up to `class NoProjectWindow`) |
+| `src/uat_tracker/ui/projects.py` | class `ClearProjectDialog` (up to `class DeleteProjectDialog`). Keep `DANGER_QSS`: Delete project uses it too |
 | `src/uat_tracker/cli_project.py` | the `restore-clear` sub-command: parser line 36, branch from line 111, `ClearError` in lines 119-120; the word in the help/docstrings (lines 1, 18) and `cli.py` line 13 |
 | `src/uat_tracker/ui/i18n.py` | all `danger.*` keys (lines 476-501) and `work.clearing` |
 | `src/uat_tracker/config.py` | field `enable_clear_project` (line 76) and its loader line 201 |
@@ -331,6 +344,7 @@ The "reading Excel is paused" state (`S_PAUSED`, the `proj.paused` banner) can s
 ```powershell
 .\run.ps1 project list | create "<name>" --folder <dir> | import <xlsx> | relink <project> <xlsx>
 .\run.ps1 project archive|unarchive <project>
+.\run.ps1 project delete <project> --confirm-name "<name>"   # archived only; without --confirm-name: shows what would be deleted
 .\run.ps1 project migrate [--yes]          # one-time: UATTracker data -> project "RAMC UAT" (dry run without --yes)
 .\run.ps1 --project "RAMC UAT" summary     # any other command works on one project
 ```

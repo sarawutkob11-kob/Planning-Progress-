@@ -18,7 +18,7 @@ from .services.holidays import parse_user_date, read_csv, refresh_year, store_ho
 from .services.reminders import ReminderError, send_reminder
 from .services.settings import install_schedule
 from .services.sync import SyncService
-from .services.traffic_light import compute
+from .services.traffic_light import compute, label
 
 
 def add_parsers(sub) -> None:
@@ -107,10 +107,10 @@ def handle(cfg, repo, args, config_path: Path) -> int | None:
             if not rec.get("active"):
                 continue
             light = compute(rec, day, cfg.alerts.fail_threshold)
-            counts[light.color] += 1
+            counts[label(light.color)] += 1
             pe = "-" if light.pct_exec is None else f"{light.pct_exec:6.1%}"
             pt = "-" if light.pct_time is None else f"{light.pct_time:6.1%}"
-            print(f"{item_id:<8} {str(rec.get('application'))[:24]:<24} {light.color:<9} "
+            print(f"{item_id:<8} {str(rec.get('application'))[:24]:<24} {label(light.color):<12} "
                   f"exec {pe:>6} time {pt:>7}  {light.reason}")
         print(f"As of {fmt(day)}, X = {cfg.alerts.fail_threshold:.0%}: "
               + ", ".join(f"{k} {v}" for k, v in counts.most_common()))

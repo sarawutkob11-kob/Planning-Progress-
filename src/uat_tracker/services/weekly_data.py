@@ -1,6 +1,8 @@
 """Weekly report data (Part 6). Every number and table is computed HERE; the AI only writes prose about it.
 
 Reuses the Part 2 Traffic Light and the Part 4 dashboard definitions so the report matches the app.
+Traffic Light values are the words users see (Delayed / At risk of delay / On track ...), never the internal codes,
+so the AI writes the same words as the app.
 No people's names or email addresses are included (approved: not sent to the AI).
 """
 
@@ -13,7 +15,7 @@ from ..excel.sheets import DEFECT_LIST, TEST_PROGRESS, UAT_PLAN
 from ..parsing.dates import fmt
 from . import views
 from .dashboard import CLOSED_DEFECT, first_line
-from .traffic_light import AMBER, COMPLETE, GREEN, MISSING, RED, compute
+from .traffic_light import AMBER, COMPLETE, GREEN, MISSING, RED, compute, label, missing_fields
 
 APP_CHANNELS = ("app", "restore")
 
@@ -42,7 +44,7 @@ def _reason_kind(light, rec, as_of: dt.date, x: float) -> str:
     return "time"
 
 
-def build_data(cfg, repo, as_of: dt.date, *, days_ahead: int = 14, days_back: int = 7) -> dict:
+def build_data(cfg, repo, as_of: dt.date, *, days_ahead: int = 7, days_back: int = 7) -> dict:
     A = as_of.isoformat()
     soon = (as_of + dt.timedelta(days=days_ahead)).isoformat()
     since = (as_of - dt.timedelta(days=days_back)).isoformat()
@@ -57,7 +59,7 @@ def build_data(cfg, repo, as_of: dt.date, *, days_ahead: int = 14, days_back: in
     executed = sum(_n(r.get("executed")) for r in tp)
     total = sum(_n(r.get("total_tc")) for r in tp)
     colors = {COMPLETE: 0, RED: 0, AMBER: 0, GREEN: 0, MISSING: 0}
-    red_amber, tp_overdue, due = [], [], []
+    late_risk, missing_data, tp_overdue, due = [], [], [], []
     for r in tp:
         light = compute(r, as_of, x)
         colors[light.color] = colors.get(light.color, 0) + 1
@@ -65,19 +67,25 @@ def build_data(cfg, repo, as_of: dt.date, *, days_ahead: int = 14, days_back: in
         pf = r.get("planned_finish")
         if light.color in (RED, AMBER):
             kind = _reason_kind(light, r, as_of, x)
-            red_amber.append({"id": r["id"], "app": name, "color": light.color, "reason_kind": kind,
+            late_risk.append({"id": r["id"], "app": name, "color": light.color, "reason_kind": kind,
                               "reason": light.reason, "planned_finish": fmt(pf) if pf else None,
+                              "days_late": (as_of - dt.date.fromisoformat(pf)).days if kind == "overdue" else None,
                               "executed": _n(r.get("executed")), "total_tc": _n(r.get("total_tc")),
                               "fail": _n(r.get("fail_count")), "pct_exec": _p(light.pct_exec),
                               "pct_time": _p(light.pct_time) if kind == "time" else None,   # >100% once overdue
                               "pct_fail": _p(light.pct_fail)})
+        elif light.color == MISSING:
+            missing_data.append({"id": r["id"], "app": name, "fields": missing_fields(r)})
         not_done = r.get("status") != "Complete"
         if not_done and pf and pf < A:
             tp_overdue.append({"id": r["id"], "app": name, "planned_finish": fmt(pf),
                                "days_late": (as_of - dt.date.fromisoformat(pf)).days})
         if not_done and pf and A <= pf <= soon:
             due.append({"date": fmt(pf), "_iso": pf, "page": "Test Progress", "id": r["id"], "name": name})
-    red_amber.sort(key=lambda a: (a["color"] != RED, a["app"]))
+    late_risk.sort(key=lambda a: (a["color"] != RED, a["app"]))
+    missing_data.sort(key=lambda a: a["app"])
+    for a in late_risk:
+        a["color"] = label(a["color"])
 
     uat_overdue = []
     for t in uat:
@@ -126,11 +134,12 @@ def build_data(cfg, repo, as_of: dt.date, *, days_ahead: int = 14, days_back: in
         "reschedule_window": {"from": fmt(since), "to": fmt((as_of - dt.timedelta(days=1)).isoformat())},
         "overall": {"apps": len(tp), "executed": executed, "total_tc": total, "pct_executed": pct(executed, total),
                     "pass": sum(_n(r.get("pass_count")) for r in tp), "fail": sum(_n(r.get("fail_count")) for r in tp),
-                    "colors": {k: v for k, v in colors.items()}},
-        "red_amber": red_amber,
+                    "colors": {label(k): v for k, v in colors.items()}},
+        "delayed_or_at_risk": late_risk,
+        "missing_data": missing_data,
         "overdue": {"uat_plan": uat_overdue, "test_progress": tp_overdue},
         "defects": {"open": len(open_d), "overdue": d_overdue, "no_target": d_none},
-        "due_next_2_weeks": due,
+        "due_next_7_days": due,
         "reschedules_last_7_days": resched,
         "open_conflicts": len(repo.open_conflicts()),
         "review_queue": len(repo.open_reviews()),

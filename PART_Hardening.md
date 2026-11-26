@@ -42,7 +42,7 @@
 - Sync for projects not currently open; pending-write UI warning; missed 08:30 alerts (waiting business answer).
 - Masking personal data before Weekly Report AI (waiting InfoSec).
 - Real login (Windows/AD identity). Phase 2. Write short README note on current limit: name/email login = claimed identity.
-- Holiday-service key in SQLite plain text: move to Windows Credential Manager like Claude key — ask me if in scope.
+- Holiday-service key in SQLite plฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃฃain text: move to Windows Credential Manager like Claude key — ask me if in scope.
 
 ## Done when
 - Sections A–E approved + done, all tests pass, README updated (new config keys, logs location, how to remove clear feature).

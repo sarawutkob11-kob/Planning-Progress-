@@ -9,7 +9,7 @@ from importlib import resources
 from pathlib import Path
 
 PROJECT_COLS = ("id", "name", "excel_path", "created_at", "created_by", "archived", "archived_at",
-                "window_start", "window_end")
+                "window_start", "window_end", "attachment_dir", "attachment_url")
 
 
 class AppDb:

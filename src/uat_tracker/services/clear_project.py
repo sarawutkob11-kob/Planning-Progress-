@@ -106,7 +106,7 @@ def _backup(cfg, repo, stamp: str) -> Path:
     try:
         with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
             z.write(tmp_db, "tracker.db")
-            att = cfg.attachment_dir
+            att = cfg.local_attachment_dir          # never the chosen result files folder (F12)
             if att.exists():
                 for f in att.rglob("*"):
                     if f.is_file():
@@ -174,7 +174,7 @@ def restore_backup(cfg, zip_path: Path, *, editor: str) -> dict:
         man = json.loads(z.read("manifest.json"))
         if man.get("project_id") != cfg.project_id:
             raise ClearError(f"This backup is for project {man.get('project_id')!r}, not {cfg.project_id!r}")
-        attachments = _attachment_targets(z, cfg.attachment_dir)    # checked before anything is changed
+        attachments = _attachment_targets(z, cfg.local_attachment_dir)    # checked first; local folder only
         stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
         if cfg.db_path.exists():                       # backup API: includes what is still in the -wal file
             keep = sqlite3.connect(cfg.db_path)

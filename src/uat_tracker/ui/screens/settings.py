@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from PySide6.QtCore import QTime
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QDoubleSpinBox, QFileDialog, QFormLayout, QHBoxLayout,
-                               QHeaderView, QLineEdit, QTableWidget, QTableWidgetItem, QTimeEdit)
+                               QHeaderView, QInputDialog, QLineEdit, QTableWidget, QTableWidgetItem, QTimeEdit)
 
 from ...alerts.templates import SUBJECTS
 from ...config import email_time
@@ -178,7 +178,12 @@ class SettingsScreen(Screen):
         rl.clicked.connect(self._relink)
         rl.setVisible(self.manager)
         row.addWidget(rl)
+        self.relink_link_btn = button(t("proj.relink_link"))
+        self.relink_link_btn.clicked.connect(self._relink_link)
+        self.relink_link_btn.setVisible(self.manager)
+        row.addWidget(self.relink_link_btn)
         form.addRow(t("proj.file"), row)
+        self._attachment_row(form, project)
         self.win_from = DatePicker(cfg.window_start.isoformat(), clearable=False)
         self.win_to = DatePicker(cfg.window_end.isoformat(), clearable=False)
         row = QHBoxLayout()
@@ -213,12 +218,96 @@ class SettingsScreen(Screen):
                 cl.addLayout(row)
         return c
 
+    def _attachment_row(self, form: QFormLayout, project: dict) -> None:
+        """Result files folder of this project (this PC). Buttons only for an Admin/PMO of this project."""
+        cfg = self.ctx.cfg
+        chosen = (project.get("attachment_dir") or "").strip()
+        url = (project.get("attachment_url") or "").strip() if chosen else ""
+        text = url or chosen or t("proj.att_default", p=cfg.local_attachment_dir)
+        self.att_label = label(text, wrap_text=True)
+        row = QHBoxLayout()
+        row.addWidget(self.att_label, 1)
+        actor = self.ctx.actor
+        if actor is not None and actor.role in projects.MANAGER_ROLES:
+            choose = button(t("proj.att_choose"))
+            choose.clicked.connect(self._choose_attachment_dir)
+            row.addWidget(choose)
+            paste = button(t("proj.att_link"))
+            paste.clicked.connect(self._paste_attachment_link)
+            row.addWidget(paste)
+            if chosen:
+                reset = button(t("proj.att_reset"))
+                reset.clicked.connect(self._reset_attachment_dir)
+                row.addWidget(reset)
+        form.addRow(t("proj.att_dir"), row)
+        if url:
+            form.addRow("", label(t("proj.att_link_local", p=chosen), "muted", wrap_text=True))
+        form.addRow("", label(t("proj.att_note"), "muted", wrap_text=True))
+
+    def _paste_attachment_link(self) -> None:
+        """SharePoint link -> the local folder OneDrive syncs; confirmed and saved like Choose folder."""
+        app, cfg = self.ctx.app, self.ctx.cfg
+        current = (app.appdb.get_project(cfg.project_id) or {}).get("attachment_url") or ""
+        link, ok = QInputDialog.getText(self, t("proj.att_link_title"), t("proj.att_link_prompt"),
+                                        QLineEdit.Normal, current)
+        if not ok or not link.strip():
+            return
+        try:
+            folder = projects.resolve_attachment_link(app.base, link)
+        except projects.AttachmentDirError as exc:
+            error(self, t(f"proj.att_{exc.code}", p=exc.path))
+            return
+        if not confirm(self, t("proj.att_link_q", n=cfg.project_name, u=link.strip(), p=folder)):
+            return
+        self._save_attachment_dir(None, link=link)
+
+    def _choose_attachment_dir(self) -> None:
+        cfg = self.ctx.cfg
+        start = str(cfg.attachment_dir if cfg.attachment_dir.is_dir() else "")
+        folder = QFileDialog.getExistingDirectory(self, t("proj.att_dir"), start)
+        if not folder:
+            return
+        if not confirm(self, t("proj.att_q", n=cfg.project_name, p=folder)):
+            return
+        self._save_attachment_dir(folder)
+
+    def _reset_attachment_dir(self) -> None:
+        if not confirm(self, t("proj.att_reset_q", n=self.ctx.cfg.project_name)):
+            return
+        self._save_attachment_dir(None)
+
+    def _save_attachment_dir(self, folder: str | None, link: str | None = None) -> None:
+        app, pid = self.ctx.app, self.ctx.cfg.project_id
+        try:
+            if link:
+                projects.set_attachment_link(app.base, app.appdb, app.person, pid, link)
+            else:
+                projects.set_attachment_dir(app.base, app.appdb, app.person, pid, folder)
+        except projects.AttachmentDirError as exc:
+            error(self, t(f"proj.att_{exc.code}", p=exc.path))
+            return
+        except projects.ProjectError as exc:
+            error(self, str(exc))
+            return
+        self.ctx.base_cfg = projects.project_config(app.base, app.appdb.get_project(pid))
+        self.ctx.reload_cfg()                             # the next upload uses the new folder, no restart
+        info(self, t("proj.att_saved"))
+        self.refresh()
+
     def _relink(self):
         from ..projects import relink_flow
         app = self.ctx.app
         pid = self.ctx.cfg.project_id
         relink_flow(self, app.base, app.appdb, app.person, app.appdb.get_project(pid),
                     on_done=lambda: app.open_project(pid))
+
+    def _relink_link(self) -> None:
+        """Relink to a pasted SharePoint .xlsx link (same flow shape as _relink)."""
+        from ..projects import relink_link_flow
+        app = self.ctx.app
+        pid = self.ctx.cfg.project_id
+        relink_link_flow(self, app.base, app.appdb, app.person, app.appdb.get_project(pid),
+                         on_done=lambda: app.open_project(pid))
 
     def _archive(self):
         app, cfg = self.ctx.app, self.ctx.cfg

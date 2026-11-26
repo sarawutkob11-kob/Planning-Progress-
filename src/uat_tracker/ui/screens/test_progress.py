@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QHBoxLayout, QHeaderView, QTableWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
 from ...services import auth
-from ...services.auth import PermissionDenied
 from ...excel.sheets import TEST_PROGRESS
 from ...parsing.dates import fmt
 from ...services import views
-from ...services.attachments import UploadError, upload
+from ...services.attachments import (AttachmentFolderUnavailable, BatchUploadResult, destination_folder,
+                                     upload_many)
+from ...services.project_template import FORM_FILENAME, FormIsProjectFile, export_blank_form
 from ..dialogs import AddApplicationDialog, UpdateDialog, error, info
 from ..i18n import t
 from ..widgets import bar, button, card, label, tag, wrap
@@ -35,6 +38,9 @@ class TestProgressScreen(Screen):
         self.up_btn.clicked.connect(self._upload)
         self.upd_btn = button("", primary=True)
         self.upd_btn.clicked.connect(self._update)
+        self.form_btn = button("")                    # Download blank form (every role)
+        self.form_btn.clicked.connect(self._download_form)
+        top.addWidget(self.form_btn)
         top.addWidget(self.up_btn)
         top.addWidget(self.upd_btn)
         self.lay.addLayout(top)
@@ -65,6 +71,7 @@ class TestProgressScreen(Screen):
         self.title.setText(t("nav.tp"))
         self.add_btn.setText(t("tp.add"))
         self.add_btn.setVisible(self.ctx.can(auth.ADD_APP))
+        self.form_btn.setText(t("tp.form"))
         self.up_btn.setText(t("tp.upload"))
         self.upd_btn.setText(t("tp.update"))
         s, rows = views.test_progress(self.ctx.cfg, self.ctx.repo, self.ctx.as_of, self.flt, self.ctx.search)
@@ -79,7 +86,8 @@ class TestProgressScreen(Screen):
             self.summary.addWidget(c)
         self.chips.set_chips([(k, t(f"f.{k}")) for k in views.TP_FILTERS], self.flt)
         cols = [t("col.app"), t("col.reporter"), t("col.progress"), t("col.passfail"), t("col.pstart"),
-                t("col.pfinish"), t("col.astart"), t("col.afinish"), t("col.upload_tc"), t("col.light")]
+                t("col.pfinish"), t("col.astart"), t("col.afinish"), t("col.status"), t("col.light"),
+                t("col.upload_tc")]
         tb = self.table
         tb.clearContents()
         tb.setColumnCount(len(cols))
@@ -115,9 +123,15 @@ class TestProgressScreen(Screen):
                     tb.setItem(i, col, QTableWidgetItem(fmt(r[key])))
                 else:
                     tb.setCellWidget(i, col, wrap(tag("not_filled", t("tag.not_filled"))))
-            tb.setCellWidget(i, 8, self._upload_cell(r))
+            # Status (Excel column 'Status'), same words as the sheet
+            if r["status"]:
+                tb.setCellWidget(i, 8, wrap(tag("Complete" if r["status"] == "Complete" else "neutral",
+                                                r["status"])))
+            else:
+                tb.setCellWidget(i, 8, wrap(tag("not_filled", t("f.no_status"))))
             tb.setCellWidget(i, 9, wrap(tag(r["color"], t(f"tag.{r['color']}"))))
             tb.cellWidget(i, 9).setToolTip(r["reason"])
+            tb.setCellWidget(i, 10, self._upload_cell(r))
             tb.setRowHeight(i, 60)
             if r["id"] == self.selected:
                 sel_row = i
@@ -202,16 +216,73 @@ class TestProgressScreen(Screen):
             error(self, t("auth.not_yours"))
             return
         types = " ".join(f"*.{x}" for x in self.ctx.cfg.alerts.attachment_types)
-        path, _ = QFileDialog.getOpenFileName(self, t("tp.upload"), "", f"Files ({types})")
+        paths, _ = QFileDialog.getOpenFileNames(self, t("tp.upload"), "", f"Files ({types})")
+        if not paths:
+            return
+        res = upload_many(self.ctx.cfg, self.ctx.repo, self.selected, paths, actor=self.ctx.actor)
+        msg = self._upload_summary(res)
+        if res.saved:
+            info(self, msg)
+            self.ctx.refresh_all()
+        else:
+            error(self, msg)
+
+    def _download_form(self):
+        """Save a blank Excel Progress form (3 sheets, no data) where the user chooses. No DB access."""
+        path, _ = QFileDialog.getSaveFileName(self, t("tp.form"), FORM_FILENAME, "Excel (*.xlsx)")
         if not path:
             return
+        if not path.lower().endswith(".xlsx"):
+            path += ".xlsx"
         try:
-            upload(self.ctx.cfg, self.ctx.repo, self.selected, path, actor=self.ctx.actor)
-        except (UploadError, PermissionDenied) as exc:
-            error(self, str(exc))
+            out = export_blank_form(Path(path), self.ctx.cfg.excel_path)
+        except FormIsProjectFile:
+            error(self, t("tp.form_is_project"))
             return
-        info(self, t("tp.uploaded"))
-        self.ctx.refresh_all()
+        except OSError:
+            error(self, t("tp.form_failed", p=path))
+            return
+        info(self, t("tp.form_saved", p=str(out)))
+
+    def _upload_summary(self, res: BatchUploadResult) -> str:
+        """One message for a multi-file upload: saved files, failed files + why, and the destination folder."""
+        lines: list[str] = []
+        if res.saved:
+            lines.append(t("tp.up_ok", n=len(res.saved)))
+            for name, r in res.saved:
+                stored = r.stored_path.name
+                lines.append("  • " + (name if stored == name else t("tp.up_saved_as", n=name, s=stored)))
+        if res.failed:
+            if lines:
+                lines.append("")
+            lines.append(t("tp.up_failed", n=len(res.failed)))
+            for name, exc in res.failed:
+                why = t("tp.up_folder_short") if isinstance(exc, AttachmentFolderUnavailable) else str(exc)
+                lines.append(f"  • {name}: {why}")
+        lines.append("")
+        unavailable = next((e for _, e in res.failed if isinstance(e, AttachmentFolderUnavailable)), None)
+        if unavailable is not None:
+            lines.append(t("tp.folder_unavailable", p=unavailable.path))
+        else:
+            folder = (res.saved[0][1].stored_path.parent if res.saved
+                      else destination_folder(self.ctx.cfg, self.ctx.repo, self.selected))
+            lines.append(t("tp.up_dest", p=folder))
+            url = self._sharepoint_url()
+            if url:
+                lines.append(t("tp.up_dest_sp", u=url))
+        if any(r.status_changed for _, r in res.saved):
+            lines.append(t("tp.up_complete"))
+        return "\n".join(lines)
+
+    def _sharepoint_url(self) -> str:
+        """SharePoint link of this project's result files folder ('' = none / single-file mode)."""
+        app, cfg = getattr(self.ctx, "app", None), self.ctx.cfg
+        if app is None or not cfg.project_id:
+            return ""
+        project = app.appdb.get_project(cfg.project_id)
+        if not isinstance(project, dict) or not project.get("attachment_dir"):
+            return ""
+        return str(project.get("attachment_url") or "").strip()
 
     def _add(self):
         dlg = AddApplicationDialog(self.ctx, self)

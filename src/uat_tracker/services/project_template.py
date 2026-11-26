@@ -7,12 +7,16 @@ tools/build_template.py from a copy of 'UAT Planning.xlsx'). Approved 10-Nov-202
   colour rules, Test Progress legend (Status / Definition), the source workbook's theme.
 - Hidden App ID column already present; header row frozen.
 - Test Progress also has Report By Email + CC Email (approved 12a).
+- export_blank_form(): the same blank workbook saved to a user-chosen path (Download blank form, 25-Nov-2026);
+  refuses the current project's Excel file.
 """
 
 from __future__ import annotations
 
 import base64
 import json
+import os
+import tempfile
 from functools import lru_cache
 from importlib import resources
 from pathlib import Path
@@ -26,6 +30,11 @@ from openpyxl.worksheet.datavalidation import DataValidation
 
 PREFORMAT_ROWS = 200
 SHEET_ORDER = ("UAT Plan", "Test Progress", "Defect List")
+FORM_FILENAME = "Planning Progress Form.xlsx"         # default name in the blank-form save dialog
+
+
+class FormIsProjectFile(ValueError):
+    """The chosen path is the current project's Excel file. Nothing was written."""
 
 
 @lru_cache(maxsize=1)
@@ -75,11 +84,8 @@ def _dxf(d: dict) -> DifferentialStyle:
     return DifferentialStyle(fill=fill, font=font)
 
 
-def create_workbook(path: Path) -> Path:
-    """Write a new, empty project workbook. The caller has checked that `path` does not exist."""
-    path = Path(path)
-    if path.exists():
-        raise FileExistsError(path)
+def _build_workbook() -> openpyxl.Workbook:
+    """Blank workbook from template(): 3 sheets, headers, styles, validations, cond formats, legend. Not saved."""
     tpl = template()
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
@@ -128,8 +134,48 @@ def create_workbook(path: Path) -> Path:
                 for k, cell in enumerate(row):
                     c = ws.cell(r, start + k, cell["value"])
                     _apply(c, cell["style"])
+    return wb
+
+
+def create_workbook(path: Path) -> Path:
+    """Write a new, empty project workbook. The caller has checked that `path` does not exist."""
+    path = Path(path)
+    if path.exists():
+        raise FileExistsError(path)
+    wb = _build_workbook()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.stem + ".creating.xlsx")
     wb.save(tmp)
     tmp.replace(path)
     return path
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    """True when a and b point to the same path: resolve() + os.path.normcase (case-insensitive on Windows)."""
+    return os.path.normcase(str(Path(a).resolve())) == os.path.normcase(str(Path(b).resolve()))
+
+
+def export_blank_form(dest: Path, project_excel: Path | None) -> Path:
+    """Save a blank form at dest, overwriting an existing file (the save dialog already asked). Returns dest.
+
+    Raises FormIsProjectFile when dest is project_excel (checked first; nothing written, no temp file).
+    Raises OSError (e.g. PermissionError) when it cannot be saved; the old dest is untouched, the temp is removed.
+    No database, Excel COM or auth access.
+    """
+    dest = Path(dest)
+    if project_excel is not None and _same_file(dest, Path(project_excel)):
+        raise FormIsProjectFile(str(dest))
+    wb = _build_workbook()
+    fd, name = tempfile.mkstemp(dir=dest.parent, prefix=".~form-", suffix=".xlsx")
+    os.close(fd)
+    tmp = Path(name)
+    try:
+        wb.save(tmp)
+        os.replace(tmp, dest)
+    except BaseException:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    return dest

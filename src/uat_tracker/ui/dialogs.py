@@ -8,6 +8,7 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (QComboBox, QDialog, QFormLayout, QFrame, QHBoxLayout, QLabel, QLineEdit,
                                QMessageBox, QPlainTextEdit, QScrollArea, QSpinBox, QVBoxLayout, QWidget)
 
+from ..alerts.rules import is_complete_text
 from ..excel.sheets import DEFECT_LIST, TEST_PROGRESS, UAT_PLAN
 from ..mail.sender import OutlookSender, SendError
 from ..parsing.dates import fmt
@@ -143,7 +144,13 @@ class UpdateDialog(_Base):
                 sb.setValue(int(r.get(f) or 0))
                 self.inputs[f] = sb
                 self.form.addRow(t(key), sb)
-            rb = QPlainTextEdit(r.get("report_by") or "")      # may hold several names, one per line
+            # TC/Result Complete: set by Upload, but the PMO may also set or clear it here
+            cur = r.get("tc_result_complete")
+            cur = "Complete" if is_complete_text(cur) else (cur or None)
+            tc_values = ["Complete"] + ([cur] if cur and cur != "Complete" else [])
+            self.inputs["tc_result_complete"] = self.status_combo(tc_values, cur)
+            self.form.addRow(t("upd.tc_result"), self.inputs["tc_result_complete"])
+            rb =QPlainTextEdit(r.get("report_by") or "")      # may hold several names, one per line
             rb.setFixedHeight(64)
             self.inputs["report_by"] = rb
             self.form.addRow(t("upd.report_by"), rb)

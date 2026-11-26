@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QAbstractItemView, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QSizePolicy, QTableWidget,
-                               QTableWidgetItem)
+                               QTableWidgetItem, QVBoxLayout)
 
 from ...services import auth
 from ...excel.sheets import TEST_PROGRESS
@@ -67,6 +67,10 @@ class DashboardScreen(Screen):
         # KPI cards
         grid = QGridLayout()
         grid.setSpacing(16)
+        c0, l0 = card()
+        l0.addWidget(label(t("dash.kpi_apps"), "muted"))
+        l0.addWidget(label(str(d.apps), "kpi"))
+        l0.addWidget(label(t("dash.apps_done", n=d.apps_done), "muted"))
         c1, l1 = card()
         l1.addWidget(label(t("dash.kpi_exec"), "muted"))
         r = QHBoxLayout()
@@ -94,9 +98,9 @@ class DashboardScreen(Screen):
         l4.addWidget(label(str(d.open_defects), "kpi"))
         l4.addWidget(tag("Overdue" if d.overdue_defects else "neutral", t("dash.def_overdue", n=d.overdue_defects)))
         l4.addWidget(tag("No target" if d.no_target_defects else "neutral", t("dash.def_notarget", n=d.no_target_defects)))
-        for i, c in enumerate((c1, c2, c3, c4)):
+        for i, c in enumerate((c0, c1, c2, c3, c4)):
             c.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)   # cards share the width, never widen the page
-            c.setMinimumWidth(200)
+            c.setMinimumWidth(170)
             grid.addWidget(c, 0, i)
             grid.setColumnStretch(i, 1)
         self.lay.addLayout(grid)
@@ -133,18 +137,32 @@ class DashboardScreen(Screen):
         right = QHBoxLayout()
         right.setSpacing(20)
         ic, il = card()
-        il.addWidget(label(t("dash.incomplete"), "h2"))
+        ih = QHBoxLayout()
+        ih.addWidget(label(t("dash.incomplete"), "h2"))
+        ih.addWidget(label(t("dash.items", n=len(d.incomplete_apps or [])), "muted"))
+        ih.addStretch(1)
+        il.addLayout(ih)
+        il.addSpacing(4)
         for a in d.incomplete_apps or []:
+            item = QVBoxLayout()
+            item.setSpacing(6)
             line = QHBoxLayout()
-            line.addWidget(label(a["name"]), 1)
+            line.setSpacing(10)
+            name = label(a["name"])
+            name.setStyleSheet("font-weight:600;")
+            line.addWidget(name, 1)
             pct = a["executed"] / a["total"] * 100 if a["total"] else 0
-            line.addWidget(label(f"{a['executed']} / {a['total']} · {pct:.0f}%", "muted"))
+            line.addWidget(label(f"{a['executed']} / {a['total']} · {pct:.0f}%", "muted"), 0, Qt.AlignVCenter)
             if a["color"] in ("Red", "Amber", "Green", "Missing"):
-                line.addWidget(tag(a["color"]))
-            il.addLayout(line)
-            il.addWidget(bar(a["executed"], a["total"], {"Red": "#A3260F", "Amber": "#7A4E00"}.get(a["color"], PRIMARY)))
+                line.addWidget(tag(a["color"]), 0, Qt.AlignVCenter)
+            item.addLayout(line)
+            b = bar(a["executed"], a["total"], {"Red": "#A3260F", "Amber": "#7A4E00"}.get(a["color"], PRIMARY))
+            b.setFixedHeight(8)
+            item.addWidget(b)
+            il.addLayout(item)
         if not d.incomplete_apps:
             il.addWidget(label(t("dash.nothing"), "muted"))
+        il.addStretch(1)   # keep items packed at the top when the card is taller than its content
         ic.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         right.addWidget(ic, 1)
         dc, dl = card()
@@ -165,6 +183,7 @@ class DashboardScreen(Screen):
             dl.addLayout(line)
         if not d.due_soon:
             dl.addWidget(label(t("dash.nothing"), "muted"))
+        dl.addStretch(1)
         dc.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         right.addWidget(dc, 1)
         self.lay.addLayout(right)

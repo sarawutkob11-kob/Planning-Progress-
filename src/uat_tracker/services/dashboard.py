@@ -50,6 +50,7 @@ class Dashboard:
     due_soon: list[dict] = field(default_factory=list)
     missing_email: list[str] = field(default_factory=list)
     apps: int = 0
+    apps_done: int = 0
 
     @property
     def pct_executed(self) -> float:
@@ -75,6 +76,7 @@ def build(cfg, repo, as_of: dt.date, days_ahead: int = 14) -> Dashboard:
     dfs.sort(key=lambda r: r.get("excel_row") or 10 ** 6)
     d = Dashboard(as_of)
     d.apps = len(tp)
+    d.apps_done = sum(1 for r in tp if r.get("status") == "Complete")
     d.executed = sum(_num(r.get("executed")) for r in tp)
     d.total_tc = sum(_num(r.get("total_tc")) for r in tp)
 

@@ -7,7 +7,7 @@ from ..services.traffic_light import AMBER, GREEN, LABEL_EN, LABEL_TH, RED
 TEXT: dict[str, tuple[str, str]] = {      # key: (English, Thai)
     # shell
     "app": ("Planning Progress", "Planning Progress"),
-    "app_sub": ("UAT planning & progress", "ติดตามแผนและผล UAT"),
+    "app_sub": ("Planning & progress", "ติดตามแผนและผล"),
     "nav.dashboard": ("Dashboard", "แดชบอร์ด"),
     "nav.uat": ("UAT Plan", "แผน UAT"),
     "nav.tp": ("Test Progress", "ความคืบหน้าการทดสอบ"),
@@ -89,6 +89,8 @@ TEXT: dict[str, tuple[str, str]] = {      # key: (English, Thai)
     "wk.s_failed": ("Failed", "ล้มเหลว"),
     "wk.s_skipped": ("Skipped", "ข้าม"),
     "wk.s_cancelled": ("Cancelled", "ยกเลิก"),
+    "dash.kpi_apps": ("Systems under test", "ระบบที่ทดสอบทั้งหมด"),
+    "dash.apps_done": ("{n} complete", "เสร็จแล้ว {n}"),
     "dash.kpi_exec": ("TC executed", "TC ที่ทดสอบแล้ว"),
     "dash.kpi_open": ("Open tasks (UAT Plan)", "งานที่ยังไม่เสร็จ (UAT Plan)"),
     "dash.of": ("of {n}", "จาก {n}"),
@@ -174,7 +176,8 @@ TEXT: dict[str, tuple[str, str]] = {      # key: (English, Thai)
     "upd.report_by": ("Report By", "Report By"),
     "upd.email": ("Report By Email", "Report By Email"),
     "upd.cc": ("CC Email (; separated)", "CC Email (คั่นด้วย ;)"),
-    "upd.bad_email": ("Not a valid email address.", "รูปแบบอีเมลไม่ถูกต้อง"),
+    "upd.tc_result": ("TC/Result Complete", "TC/Result Complete"),
+    "upd.bad_email":("Not a valid email address.", "รูปแบบอีเมลไม่ถูกต้อง"),
     # test progress
     "tp.executed": ("Executed / Total", "ทดสอบแล้ว / ทั้งหมด"),
     "tp.pass": ("Pass", "ผ่าน"),
@@ -198,7 +201,28 @@ TEXT: dict[str, tuple[str, str]] = {      # key: (English, Thai)
     "tp.has_file": ("Result file uploaded in the app", "อัปโหลดไฟล์ผลทดสอบในแอปแล้ว"),
     "tp.update": ("Update results", "อัปเดตผล"),
     "tp.upload": ("Upload result file", "อัปโหลดไฟล์ผลทดสอบ"),
+    "tp.form": ("Download blank form", "ดาวน์โหลดฟอร์มเปล่า"),
+    "tp.form_saved": ("Blank form saved:\n{p}", "บันทึกฟอร์มเปล่าแล้ว:\n{p}"),
+    "tp.form_is_project": ("This is the project's Excel file. Choose another file name.",
+                           "ไฟล์นี้คือไฟล์ Excel ของโปรเจกต์ กรุณาเลือกชื่อไฟล์อื่น"),
+    "tp.form_failed": (
+        "Can't save the form:\n{p}\nClose the file if it is open in Excel, or choose another folder, "
+        "then try again.",
+        "บันทึกฟอร์มไม่ได้:\n{p}\nกรุณาปิดไฟล์ถ้าเปิดอยู่ใน Excel หรือเลือกโฟลเดอร์อื่น แล้วลองใหม่"),
     "tp.uploaded": ("Saved. TC/Result Complete is now Complete.", "บันทึกแล้ว TC/Result Complete เป็น Complete"),
+    "tp.saved_in": ("Saved in: {p}", "เก็บไฟล์ที่: {p}"),
+    "tp.folder_unavailable": (
+        "Can't save to the result files folder:\n{p}\nCheck that OneDrive / the network drive is connected and "
+        "synced, then try again, or ask an Admin/PMO to change the folder. Nothing was saved.",
+        "บันทึกลงโฟลเดอร์เก็บไฟล์ผลทดสอบไม่ได้:\n{p}\nกรุณาตรวจว่า OneDrive / ไดรฟ์เครือข่ายเชื่อมต่อและ sync อยู่ "
+        "แล้วลองใหม่ หรือแจ้ง Admin/PMO ให้เปลี่ยนโฟลเดอร์ ยังไม่มีการบันทึกใด ๆ"),
+    "tp.up_ok": ("Uploaded ({n}):", "อัปโหลดสำเร็จ ({n} ไฟล์):"),
+    "tp.up_failed": ("Not uploaded ({n}):", "อัปโหลดไม่สำเร็จ ({n} ไฟล์):"),
+    "tp.up_saved_as": ("{n} (saved as {s})", "{n} (บันทึกเป็น {s})"),
+    "tp.up_folder_short": ("can't save to the result files folder", "บันทึกลงโฟลเดอร์เก็บไฟล์ผลทดสอบไม่ได้"),
+    "tp.up_dest": ("Destination folder: {p}", "โฟลเดอร์ปลายทาง: {p}"),
+    "tp.up_dest_sp": ("OneDrive uploads it to SharePoint: {u}", "OneDrive จะอัปโหลดขึ้น SharePoint: {u}"),
+    "tp.up_complete": ("TC/Result Complete is now Complete.", "TC/Result Complete เป็น Complete แล้ว"),
     "tp.select": ("Select an app first.", "กรุณาเลือกแอปก่อน"),
     # defects
     "def.board": ("Board", "บอร์ด"),
@@ -489,7 +513,100 @@ TEXT: dict[str, tuple[str, str]] = {      # key: (English, Thai)
                          "อีเมลใหม่: จะได้สิทธิ์ QA ในโปรเจกต์ที่มีอีเมลนี้ใน Test Progress ถ้าไม่มี กรุณาติดต่อ Admin"),
     "proj.profile_known": ("This email is already registered as {n}. The saved name is used.",
                            "อีเมลนี้ลงทะเบียนแล้วในชื่อ {n} ระบบใช้ชื่อที่บันทึกไว้"),
-    "task.new_group": ("+ New group…", "+ กลุ่มใหม่…"),
+    "proj.att_dir": ("Result files folder", "โฟลเดอร์เก็บไฟล์ผลทดสอบ"),
+    "proj.att_default": ("Default (this PC): {p}", "ค่าเริ่มต้น (เครื่องนี้): {p}"),
+    "proj.att_choose": ("Choose folder…", "เลือกโฟลเดอร์…"),
+    "proj.att_reset": ("Use default", "ใช้ค่าเริ่มต้น"),
+    "proj.att_note": ("New uploads of this project go here. Files uploaded earlier stay where they are. "
+                      "This setting is for this PC only.",
+                      "ไฟล์ที่อัปโหลดใหม่ของโปรเจกต์นี้จะเก็บที่นี่ ไฟล์ที่อัปโหลดไปแล้วอยู่ที่เดิม "
+                      "ค่านี้ใช้กับเครื่องนี้เท่านั้น"),
+    "proj.att_q": ("Save uploaded result files of '{n}' in:\n{p}?",
+                   "เก็บไฟล์ผลทดสอบที่อัปโหลดของ '{n}' ที่:\n{p} ใช่หรือไม่"),
+    "proj.att_reset_q": ("Use the default folder on this PC for '{n}'?",
+                         "ให้ '{n}' กลับไปใช้โฟลเดอร์ค่าเริ่มต้นบนเครื่องนี้ใช่หรือไม่"),
+    "proj.att_saved": ("Result files folder saved.", "บันทึกโฟลเดอร์เก็บไฟล์ผลทดสอบแล้ว"),
+    "proj.att_not_found": ("Folder not found: {p}", "ไม่พบโฟลเดอร์: {p}"),
+    "proj.att_not_writable": ("The app can't write to this folder: {p}", "แอปเขียนไฟล์ลงโฟลเดอร์นี้ไม่ได้: {p}"),
+    "proj.att_not_absolute": ("Choose a full folder path: {p}", "กรุณาเลือกโฟลเดอร์แบบ path เต็ม: {p}"),
+    "proj.att_inside_data": ("This folder is inside the app's project data and may be deleted with a project. "
+                             "Choose another folder: {p}",
+                             "โฟลเดอร์นี้อยู่ในข้อมูลโปรเจกต์ของแอปและอาจถูกลบไปพร้อมโปรเจกต์ "
+                             "กรุณาเลือกโฟลเดอร์อื่น: {p}"),
+    "proj.att_link": ("Paste SharePoint link…", "วางลิงก์ SharePoint…"),
+    "proj.att_link_title": ("SharePoint link", "ลิงก์ SharePoint"),
+    "proj.att_link_prompt": ("Open the SharePoint folder in the browser and paste the URL from the address bar:",
+                             "เปิดโฟลเดอร์ SharePoint ในเบราว์เซอร์ แล้ววาง URL จากแถบที่อยู่ (address bar):"),
+    "proj.att_link_q": ("Save uploaded result files of '{n}' in SharePoint:\n{u}\n\nThe app copies them to the "
+                        "folder OneDrive syncs on this PC:\n{p}\nOneDrive then uploads them. Continue?",
+                        "เก็บไฟล์ผลทดสอบที่อัปโหลดของ '{n}' ที่ SharePoint:\n{u}\n\nแอปจะ copy ไฟล์ไปที่โฟลเดอร์ที่ "
+                        "OneDrive sync บนเครื่องนี้:\n{p}\nแล้ว OneDrive จะอัปโหลดขึ้น SharePoint ต่อ ใช่หรือไม่"),
+    "proj.att_link_local": ("Local folder synced by OneDrive: {p}", "โฟลเดอร์บนเครื่องที่ OneDrive sync: {p}"),
+    "proj.att_link_invalid": ("This is not a SharePoint folder link: {p}\nOpen the folder in the browser and copy "
+                              "the URL from the address bar.",
+                              "ลิงก์นี้ไม่ใช่ลิงก์โฟลเดอร์ SharePoint: {p}\nกรุณาเปิดโฟลเดอร์ในเบราว์เซอร์ "
+                              "แล้ว copy URL จากแถบที่อยู่ (address bar)"),
+    "proj.att_link_sharing": ("A sharing link (\"Copy link\") can't be used: {p}\nOpen the folder in the browser "
+                              "and copy the URL from the address bar instead.",
+                              "ใช้ลิงก์แชร์ (\"Copy link\") ไม่ได้: {p}\nกรุณาเปิดโฟลเดอร์ในเบราว์เซอร์ "
+                              "แล้ว copy URL จากแถบที่อยู่ (address bar) แทน"),
+    "proj.att_link_not_synced": ("OneDrive on this PC does not sync the library of this link:\n{p}\n\nTo fix: "
+                                 "open the SharePoint library in the browser, click Sync or \"Add shortcut to My "
+                                 "files\", wait until OneDrive has finished, then try again. With a shortcut, "
+                                 "use \"Choose folder…\" and pick the folder inside your OneDrive.",
+                                 "OneDrive บนเครื่องนี้ยังไม่ได้ sync library ของลิงก์นี้:\n{p}\n\nวิธีแก้: "
+                                 "เปิด library ใน SharePoint ด้วยเบราว์เซอร์ กด Sync หรือ \"Add shortcut to My "
+                                 "files\" รอ OneDrive sync เสร็จ แล้วลองใหม่ ถ้าใช้ shortcut ให้กด "
+                                 "\"เลือกโฟลเดอร์…\" แล้วเลือกโฟลเดอร์นั้นใน OneDrive ของคุณ"),
+    "proj.att_link_not_found": ("The link points to this folder, which is not on this PC yet:\n{p}\nWait until "
+                                "OneDrive has finished syncing (or check the link), then try again.",
+                                "ลิงก์นี้ชี้ไปที่โฟลเดอร์ที่ยังไม่มีบนเครื่องนี้:\n{p}\nกรุณารอ OneDrive sync "
+                                "ให้เสร็จ (หรือตรวจลิงก์อีกครั้ง) แล้วลองใหม่"),
+    # Project Excel file from a SharePoint link (proj.xl_<ExcelLinkError.code>)
+    "proj.import_how": ("How do you want to import the Excel file?", "ต้องการนำเข้าไฟล์ Excel แบบไหน?"),
+    "proj.import_file": ("Choose file…", "เลือกไฟล์…"),
+    "proj.import_link": ("Import from SharePoint link…", "นำเข้าจากลิงก์ SharePoint…"),
+    "proj.relink_link": ("Relink from SharePoint link…", "เลือกไฟล์ใหม่จากลิงก์ SharePoint…"),
+    "proj.xl_link_title": ("SharePoint Excel file link", "ลิงก์ไฟล์ Excel บน SharePoint"),
+    "proj.xl_link_prompt": ("Paste the link of the .xlsx file on SharePoint (in Excel: File > Info > Copy path):",
+                            "วางลิงก์ของไฟล์ .xlsx บน SharePoint (ใน Excel: File > Info > Copy path):"),
+    "proj.import_link_q": ("Import the SharePoint file:\n{u}\n\nOneDrive file on this PC:\n{p}\n\nas project "
+                           "'{n}'? The file is not renamed and its other sheets are not touched.",
+                           "นำเข้าไฟล์บน SharePoint:\n{u}\n\nไฟล์ที่ OneDrive sync บนเครื่องนี้:\n{p}\n\n"
+                           "เป็นโปรเจกต์ '{n}' ใช่ไหม? ไฟล์จะไม่ถูกเปลี่ยนชื่อ และชีตอื่นจะไม่ถูกแตะต้อง"),
+    "proj.relink_link_q": ("Use the SharePoint file:\n{u}\n\nOneDrive file on this PC:\n{p}\n\nas the Excel file "
+                           "of '{n}'?",
+                           "ใช้ไฟล์บน SharePoint:\n{u}\n\nไฟล์ที่ OneDrive sync บนเครื่องนี้:\n{p}\n\n"
+                           "เป็นไฟล์ Excel ของ '{n}' ใช่ไหม?"),
+    "proj.xl_link_invalid": ("This is not a SharePoint file link: {p}\nIn Excel use File > Info > Copy path, "
+                             "then paste it here.",
+                             "ลิงก์นี้ไม่ใช่ลิงก์ไฟล์บน SharePoint: {p}\nใน Excel ให้ใช้ File > Info > Copy path "
+                             "แล้ววางที่นี่"),
+    "proj.xl_link_sharing": ("This kind of link can't be used: {p}\nIn Excel use File > Info > Copy path, or in "
+                             "SharePoint use Copy link with \"People with existing access\", then paste it here.",
+                             "ใช้ลิงก์แบบนี้ไม่ได้: {p}\nใน Excel ให้ใช้ File > Info > Copy path หรือใน SharePoint "
+                             "ใช้ Copy link แบบ \"People with existing access\" แล้ววางที่นี่"),
+    "proj.xl_link_not_xlsx": ("The link must point to an Excel .xlsx file (not a folder or another file type): {p}",
+                              "ลิงก์ต้องชี้ไปที่ไฟล์ Excel .xlsx (ไม่ใช่โฟลเดอร์หรือไฟล์ชนิดอื่น): {p}"),
+    "proj.xl_link_not_synced": ("OneDrive on this PC does not sync the library of this link:\n{p}\n\nTo fix: "
+                                "open the SharePoint library in the browser, click Sync or \"Add shortcut to My "
+                                "files\", wait until OneDrive has finished, then try again. With a shortcut, use "
+                                "\"Import Excel\" / \"Relink file…\" and pick the file inside your OneDrive.",
+                                "OneDrive บนเครื่องนี้ยังไม่ได้ sync library ของลิงก์นี้:\n{p}\n\nวิธีแก้: "
+                                "เปิด library ใน SharePoint ด้วยเบราว์เซอร์ กด Sync หรือ \"Add shortcut to My "
+                                "files\" รอ OneDrive sync เสร็จ แล้วลองใหม่ ถ้าใช้ shortcut ให้กด "
+                                "\"นำเข้าไฟล์ Excel\" / \"เลือกไฟล์ใหม่ (Relink)…\" แล้วเลือกไฟล์ใน OneDrive ของคุณ"),
+    "proj.xl_link_not_found": ("The link points to this file, which is not on this PC yet:\n{p}\nWait until "
+                               "OneDrive has finished syncing, check that its folder is not excluded in OneDrive "
+                               "\"Choose folders\", or check the link, then try again.",
+                               "ลิงก์นี้ชี้ไปที่ไฟล์ที่ยังไม่มีบนเครื่องนี้:\n{p}\nกรุณารอ OneDrive sync ให้เสร็จ "
+                               "ตรวจว่าโฟลเดอร์ของไฟล์ไม่ได้ถูกตัดออกใน \"Choose folders\" ของ OneDrive "
+                               "หรือตรวจลิงก์อีกครั้ง แล้วลองใหม่"),
+    "proj.xl_link_unreadable": ("The file can't be read from OneDrive on this PC:\n{p}\nCheck that OneDrive is "
+                                "running and online, then try again.",
+                                "อ่านไฟล์จาก OneDrive บนเครื่องนี้ไม่ได้:\n{p}\nกรุณาตรวจว่า OneDrive ทำงานและ"
+                                "เชื่อมต่ออินเทอร์เน็ตอยู่ แล้วลองใหม่"),
+    "task.new_group":("+ New group…", "+ กลุ่มใหม่…"),
     "task.new_group_title": ("New group title", "ชื่อกลุ่มใหม่"),
     "tp.add": ("+ Add Application", "+ เพิ่ม Application"),
     "app.new": ("New application", "Application ใหม่"),

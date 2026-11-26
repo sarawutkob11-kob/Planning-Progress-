@@ -75,6 +75,8 @@ class Config:
     project_name: str = ""
     enable_clear_project: bool = False   # [features] enable_clear_project - temporary "Clear project data" (off by default)
     weekly_ai: WeeklyAiConfig = field(default_factory=WeeklyAiConfig)
+    # Per-project result files folder (app.db project.attachment_dir); None = <data_dir>/attachments.
+    attachment_folder: Path | None = None
 
     @property
     def db_path(self) -> Path:
@@ -99,7 +101,19 @@ class Config:
 
     @property
     def attachment_dir(self) -> Path:
+        """Where new uploads go: the project's chosen folder, else <data_dir>/attachments."""
+        if self.uses_attachment_folder:
+            return self.attachment_folder
+        return self.local_attachment_dir
+
+    @property
+    def local_attachment_dir(self) -> Path:
+        """<data_dir>/attachments on this PC. Clear project data / restore / Delete project use only this."""
         return self.data_dir / "attachments"
+
+    @property
+    def uses_attachment_folder(self) -> bool:
+        return self.project_id is not None and self.attachment_folder is not None
 
     @property
     def preview_dir(self) -> Path:

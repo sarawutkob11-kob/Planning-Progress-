@@ -169,9 +169,13 @@ class AppController(QObject):
             self.open_project(dlg.project["id"])
 
     def import_project(self) -> None:
-        from .projects import import_project_flow
-        import_project_flow(self.win, self.base, self.appdb, self.person,
-                            on_done=lambda p: self.open_project(p["id"]))
+        """Asks first: choose a file (the old flow) or paste a SharePoint link."""
+        from .projects import import_choice, import_link_flow, import_project_flow
+        how = import_choice(self.win)
+        if how is None:
+            return
+        flow = import_link_flow if how == "link" else import_project_flow
+        flow(self.win, self.base, self.appdb, self.person, on_done=lambda p: self.open_project(p["id"]))
 
     def quit(self) -> None:
         if self.sync_thread is not None:
